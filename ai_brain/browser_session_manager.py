@@ -12,8 +12,10 @@ Key features:
 - Only closes when explicitly requested
 """
 
+import re
 import time
 from typing import Optional, Dict
+from urllib.parse import urlparse, parse_qs
 from rich.console import Console
 
 console = Console()
@@ -102,26 +104,29 @@ class BrowserSessionManager:
         try:
             current_url = browser.driver.current_url if browser.driver else None
             if current_url and 'console.aws.amazon.com' in current_url:
-                # Already on AWS Console - mark as authenticated and return
                 cls._authenticated_accounts.add(account)
-                cls._current_region = region
                 console.print(f"[green]✅ Already on AWS Console for {account}! (Session active)[/green]")
+                cls._refresh_current_region(reason="existing session")
+                cls._dismiss_cookie_banner()
                 return True
-        except:
+        except Exception:
             pass
-        
+
         # Check if already authenticated to this account (from previous session)
         if account in cls._authenticated_accounts:
             console.print(f"[dim]✓ Already authenticated to {account}[/dim]")
+            cls._refresh_current_region(reason="cached authentication")
+            cls._dismiss_cookie_banner()
             return True
-        
+
         console.print(f"[cyan]🔐 Authenticating to AWS account: {account}[/cyan]")
-        
+
         # Perform Duo SSO authentication
         if browser.authenticate_aws_duo_sso(account_name=account):
             cls._authenticated_accounts.add(account)
-            cls._current_region = region
             console.print(f"[green]✅ Authenticated to {account} successfully![/green]")
+            cls._refresh_current_region(reason="post-authentication")
+            cls._dismiss_cookie_banner()
             return True
         else:
             console.print(f"[red]❌ Authentication to {account} failed[/red]")
@@ -354,10 +359,21 @@ class BrowserSessionManager:
                     console.print("[yellow]⚠️  Could not click region option, trying Selenium fallback...[/yellow]")
                     return cls._change_region_selenium(browser, new_region)
                 
-                time.sleep(3)  # Wait for page reload
-                cls._current_region = new_region
-                console.print(f"[bold green]✅ Successfully changed to region: {new_region}[/bold green]")
-                return True
+                # Wait for region change to take effect and verify
+                for _ in range(10):
+                    time.sleep(1)
+                    detected = cls._detect_current_region(browser)
+                    if detected == new_region:
+                        cls._current_region = detected
+                        cls._dismiss_cookie_banner(browser)
+                        console.print(f"[bold green]✅ Successfully changed to region: {new_region}[/bold green]")
+                        return True
+
+                detected = cls._detect_current_region(browser)
+                console.print(f"[yellow]⚠️  Region change verification failed (detected: {detected or 'unknown'})[/yellow]")
+                if detected:
+                    cls._current_region = detected
+                return False
             
             except Exception as e:
                 console.print(f"[yellow]⚠️  Playwright region change failed: {e}[/yellow]")
@@ -430,17 +446,212 @@ class BrowserSessionManager:
                 }
             """, new_region)
             
-            time.sleep(4)  # Wait for region change to complete
-            cls._current_region = new_region
-            console.print(f"[green]✅ Region changed to {new_region} (Selenium)[/green]")
-            return True
-        
+            # Wait for region change to complete and verify using detection
+            detected = None
+            for _ in range(12):
+                time.sleep(1)
+                detected = cls._detect_current_region(browser)
+                if detected == new_region:
+                    cls._current_region = detected
+                    cls._dismiss_cookie_banner(browser)
+                    console.print(f"[green]✅ Region changed to {new_region} (Selenium)[/green]")
+                    return True
+
+            console.print(f"[yellow]⚠️  Unable to confirm region change to {new_region} (detected: {detected or 'unknown'})[/yellow]")
+            if detected:
+                cls._current_region = detected
+            return False
+
         except Exception as e:
             console.print(f"[red]❌ Selenium region change failed: {e}[/red]")
             import traceback
             traceback.print_exc()
             return False
-    
+
+    @classmethod
+    def _extract_region_from_url(cls, url: Optional[str]) -> Optional[str]:
+        """Extract region code from an AWS Console URL if present"""
+        if not url:
+            return None
+
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return None
+
+        # Check subdomain (e.g., eu-west-1.console.aws.amazon.com)
+        host_parts = parsed.netloc.split('.') if parsed.netloc else []
+        if host_parts:
+            candidate = host_parts[0]
+            if re.fullmatch(r"[a-z]{2}-[a-z0-9-]+-[0-9]", candidate):
+                return candidate
+
+        # Check query parameters
+        query_regions = parse_qs(parsed.query or "").get('region')
+        if query_regions:
+            return query_regions[0]
+
+        # Check hash fragment (some consoles include region there)
+        fragment = parsed.fragment or ''
+        match = re.search(r'region=([a-z0-9-]+)', fragment)
+        if match:
+            return match.group(1)
+
+        return None
+
+    @classmethod
+    def _detect_current_region(cls, browser=None) -> Optional[str]:
+        """Detect the currently active AWS region"""
+        browser = browser or cls._browser_instance
+        driver = getattr(browser, 'driver', None)
+        if not driver:
+            return None
+
+        # First, try to extract from URL
+        try:
+            url = driver.current_url
+            region = cls._extract_region_from_url(url)
+            if region:
+                return region
+        except Exception:
+            pass
+
+        # Fallback: inspect region selector via JavaScript
+        try:
+            region = driver.execute_script("""
+                try {
+                    var selectors = [
+                        '[data-testid="awsc-nav-region-menu-button"]',
+                        'button[aria-label*="region" i]',
+                        '#regionMenuButton'
+                    ];
+
+                    for (var i = 0; i < selectors.length; i++) {
+                        var el = document.querySelector(selectors[i]);
+                        if (!el) { continue; }
+
+                        if (el.dataset) {
+                            if (el.dataset.region) { return el.dataset.region; }
+                            if (el.dataset.regionCode) { return el.dataset.regionCode; }
+                        }
+
+                        var label = (el.getAttribute('aria-label') || '').toLowerCase();
+                        var text = (el.innerText || el.textContent || '').toLowerCase();
+                        var combined = label + ' ' + text;
+                        var match = combined.match(/([a-z]{2}-[a-z0-9-]+-[0-9])/);
+                        if (match && match[1]) { return match[1]; }
+                    }
+
+                    var menu = document.querySelector('[data-region] [aria-current="true"], [role="menu"] [aria-current="true"]');
+                    if (menu) {
+                        var attrs = [menu.getAttribute('data-region'), menu.getAttribute('aria-label'), menu.innerText];
+                        for (var j = 0; j < attrs.length; j++) {
+                            var value = (attrs[j] || '').toLowerCase();
+                            var match = value.match(/([a-z]{2}-[a-z0-9-]+-[0-9])/);
+                            if (match && match[1]) { return match[1]; }
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Region detection error', err);
+                }
+                return null;
+            """)
+            if region:
+                return region
+        except Exception:
+            pass
+
+        return None
+
+    @classmethod
+    def _refresh_current_region(cls, reason: str = "", browser=None) -> Optional[str]:
+        """Update the cached region based on the active console view"""
+        browser = browser or cls._browser_instance
+        detected = cls._detect_current_region(browser)
+
+        if detected:
+            if cls._current_region != detected:
+                note = f" ({reason})" if reason else ""
+                console.print(f"[cyan]🧭 Detected active AWS region: {detected}{note}[/cyan]")
+            cls._current_region = detected
+        elif reason:
+            console.print(f"[yellow]⚠️  Unable to detect AWS region{f' ({reason})' if reason else ''}[/yellow]")
+
+        return detected
+
+    @classmethod
+    def _dismiss_cookie_banner(cls, browser=None) -> bool:
+        """Automatically accept AWS cookie consent banner if present"""
+        browser = browser or cls._browser_instance
+        driver = getattr(browser, 'driver', None)
+        if not driver:
+            return False
+
+        try:
+            clicked = driver.execute_script("""
+                try {
+                    var keywords = arguments[0];
+                    var selectors = [
+                        '[data-testid="awsui-dialog__acknowledge-button"]',
+                        '[data-testid*="cookie"][data-action*="accept" i]',
+                        'button', 'a', '[role="button"]', 'input[type="submit"]'
+                    ];
+
+                    var seen = new Set();
+                    function matches(el) {
+                        if (!el || seen.has(el)) { return null; }
+                        seen.add(el);
+                        var text = (el.innerText || el.textContent || el.value || '').trim().toLowerCase();
+                        if (!text) { return null; }
+                        for (var i = 0; i < keywords.length; i++) {
+                            if (text.includes(keywords[i])) {
+                                return text;
+                            }
+                        }
+                        return null;
+                    }
+
+                    function tryClick(elements) {
+                        if (!elements) { return null; }
+                        for (var i = 0; i < elements.length; i++) {
+                            var label = matches(elements[i]);
+                            if (label) {
+                                elements[i].click();
+                                return label;
+                            }
+                        }
+                        return null;
+                    }
+
+                    // Direct buttons
+                    for (var s = 0; s < selectors.length; s++) {
+                        var found = tryClick(document.querySelectorAll(selectors[s]));
+                        if (found) { return found; }
+                    }
+
+                    // Banner-specific containers
+                    var banner = document.querySelector('[data-testid*="cookie"], [aria-label*="cookie" i], [id*="cookie"]');
+                    if (banner) {
+                        var result = tryClick(banner.querySelectorAll('button, a, [role="button"], input[type="submit"]'));
+                        if (result) { return result; }
+                    }
+                } catch (err) {
+                    console.warn('Cookie banner detection error', err);
+                }
+                return null;
+            """, [
+                'accept all', 'accept', 'allow all', 'got it', 'agree', 'i understand', 'ok'
+            ])
+
+            if clicked:
+                text = str(clicked).strip()
+                console.print(f"[green]🍪 Accepted AWS cookie banner ({text})[/green]")
+                return True
+        except Exception:
+            return False
+
+        return False
+
     @classmethod
     def close_browser(cls):
         """
