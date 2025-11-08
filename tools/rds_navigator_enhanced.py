@@ -56,6 +56,13 @@ class RDSNavigatorEnhanced:
         """Set AWS region"""
         self.region = region
         console.print(f"[cyan]🌍 Region set to: {region}[/cyan]")
+
+        if AWS_SDK_AVAILABLE:
+            try:
+                self.aws_helper = AWSRDSHelper(region=region, profile=self.aws_profile)
+            except Exception as e:
+                console.print(f"[yellow]⚠️  AWS SDK reinitialization failed for region {region}: {e}[/yellow]")
+                self.aws_helper = None
     
     def navigate_to_cluster_direct(self, cluster_id: str, tab: str = None, is_cluster: bool = True) -> bool:
         """
