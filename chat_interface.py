@@ -5,6 +5,8 @@ Provides a user-friendly terminal chat experience
 
 import os
 import sys
+import signal
+import atexit
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -17,6 +19,26 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from ai_brain.intelligent_agent import IntelligentAgent
 
 console = Console()
+
+# Global agent instance for cleanup
+_agent_instance = None
+
+def cleanup_handler(signum=None, frame=None):
+    """Handle cleanup on exit/interrupt"""
+    global _agent_instance
+    if _agent_instance:
+        console.print("\n[cyan]🧹 Cleaning up resources...[/cyan]")
+        try:
+            _agent_instance.cleanup()
+            console.print("[green]✅ Cleanup complete[/green]\n")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Cleanup warning: {e}[/yellow]\n")
+    sys.exit(0)
+
+# Register cleanup handlers
+signal.signal(signal.SIGINT, cleanup_handler)
+signal.signal(signal.SIGTERM, cleanup_handler)
+atexit.register(lambda: cleanup_handler() if _agent_instance else None)
 
 def print_welcome():
     """Print welcome banner"""
@@ -89,6 +111,8 @@ I understand natural language! Just ask me what you need. Here are some examples
 
 def main():
     """Main chat loop"""
+    global _agent_instance
+    
     # Load environment variables
     load_dotenv()
     
@@ -99,6 +123,7 @@ def main():
     console.print("\n[cyan]🔄 Initializing Intelligent Agent...[/cyan]")
     try:
         agent = IntelligentAgent()
+        _agent_instance = agent  # Store for cleanup
     except Exception as e:
         console.print(f"[red]❌ Failed to initialize: {e}[/red]")
         console.print(f"[yellow]Check your .env file configuration[/yellow]")
@@ -171,8 +196,17 @@ def main():
             continue
     
     # Cleanup on exit
-    agent.cleanup()
+    try:
+        console.print("\n[cyan]🧹 Cleaning up resources...[/cyan]")
+        agent.cleanup()
+        console.print("[green]✅ Cleanup complete[/green]\n")
+    except Exception as e:
+        console.print(f"[yellow]⚠️  Cleanup warning: {e}[/yellow]\n")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n\n[yellow]👋 Interrupted. Exiting...[/yellow]\n")
+        sys.exit(0)
 

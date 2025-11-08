@@ -1948,11 +1948,46 @@ class UniversalScreenshotEnhanced:
         return False
     
     def close(self):
-        """Close browser"""
+        """Close browser and clean up AWS sessions"""
         try:
             if self.driver:
+                # Clear AWS session cookies before closing
+                try:
+                    console.print("[dim]🧹 Clearing AWS session cookies...[/dim]")
+                    self.driver.delete_all_cookies()
+                    
+                    # Close all extra windows/tabs
+                    if len(self.driver.window_handles) > 1:
+                        for handle in self.driver.window_handles[1:]:
+                            self.driver.switch_to.window(handle)
+                            self.driver.close()
+                        self.driver.switch_to.window(self.driver.window_handles[0])
+                except Exception as e:
+                    if self.debug:
+                        console.print(f"[dim]Cookie cleanup: {str(e)[:60]}[/dim]")
+                
+                # Close Playwright if connected
+                try:
+                    if self.page:
+                        self.page.close()
+                    if self.browser_pw:
+                        self.browser_pw.close()
+                    if self.playwright:
+                        self.playwright.stop()
+                except Exception as e:
+                    if self.debug:
+                        console.print(f"[dim]Playwright cleanup: {str(e)[:60]}[/dim]")
+                
+                # Finally close the browser
                 self.driver.quit()
-                console.print("[green]🔒 Browser closed[/green]")
+                console.print("[green]🔒 Browser closed and sessions cleared[/green]")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Error closing browser: {str(e)[:80]}[/yellow]")
+    
+    def __del__(self):
+        """Destructor to ensure browser is closed"""
+        try:
+            self.close()
         except:
             pass
     
