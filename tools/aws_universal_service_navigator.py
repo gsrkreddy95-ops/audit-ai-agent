@@ -13,11 +13,44 @@ Designed to work like a HUMAN navigating AWS Console!
 """
 
 import time
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Callable
 from rich.console import Console
 from tools.aws_tab_navigator import AWSTabNavigator
 
 console = Console()
+
+
+@dataclass
+class ServiceContext:
+    """Track navigation context for a specific AWS service."""
+
+    service_name: str
+    normalized_key: str
+    last_url: Optional[str] = None
+    last_tab: Optional[str] = None
+    last_mode: str = ""
+    last_visited: float = field(default_factory=time.time)
+    available_tabs: List[str] = field(default_factory=list)
+    history: List[str] = field(default_factory=list)
+
+    def log_event(self, event: str):
+        timestamp = time.strftime("%H:%M:%S")
+        self.history.append(f"{timestamp} {event}")
+        if len(self.history) > 25:
+            del self.history[:-25]
+
+    def to_dict(self) -> Dict:
+        return {
+            "service_name": self.service_name,
+            "normalized_key": self.normalized_key,
+            "last_url": self.last_url,
+            "last_tab": self.last_tab,
+            "last_mode": self.last_mode,
+            "last_visited": self.last_visited,
+            "available_tabs": list(self.available_tabs),
+            "history": list(self.history),
+        }
 
 
 class AWSUniversalServiceNavigator:
@@ -80,7 +113,7 @@ class AWSUniversalServiceNavigator:
     def __init__(self, driver, region: str = "us-east-1"):
         """
         Initialize universal navigator.
-        
+
         Args:
             driver: Selenium WebDriver instance
             region: AWS region (default us-east-1)
@@ -90,46 +123,254 @@ class AWSUniversalServiceNavigator:
         self.tab_navigator = AWSTabNavigator(driver)
         self.navigation_history = []
         self.current_service = None
-        
+        self.service_contexts: Dict[str, ServiceContext] = {}
+
         console.print(f"[bold green]🌐 AWS Universal Navigator Ready![/bold green]")
         console.print(f"[dim]Region: {region}[/dim]")
-    
-    def navigate_to_service(self, service_name: str, use_search: bool = True) -> bool:
-        """
-        Navigate to any AWS service.
-        
-        Args:
-            service_name: Service name (e.g., 'RDS', 'EC2', 'Lambda')
-            use_search: If True, uses AWS Console search (faster, more human-like)
-        
-        Returns:
-            True if navigation successful
-        """
-        service_lower = service_name.lower().replace(' ', '-')
-        
-        console.print(f"[bold cyan]🚀 Navigating to {service_name}...[/bold cyan]")
-        
-        if use_search:
-            # Try AWS Console search first (FASTEST, most human-like!)
-            if self._navigate_via_search(service_name):
-                self.current_service = service_name
-                self.navigation_history.append(service_name)
-                return True
-        
-        # Fallback to direct URL
-        if service_lower in self.SERVICE_URLS:
-            url = self.SERVICE_URLS[service_lower].format(region=self.region)
+
+    # ==================== Internal helpers ====================
+
+    def _normalize_service_key(self, service_name: Optional[str]) -> Optional[str]:
+        if not service_name:
+            return None
+        return service_name.strip().lower().replace(" ", "-").replace("_", "-")
+
+    def _safe_current_url(self) -> str:
+        try:
+            return self.driver.current_url or ""
+        except Exception:
+            return ""
+
+    def _normalized_url_variants(self, url: Optional[str]) -> List[str]:
+        if not url:
+            return []
+
+        cleaned = url.lower().replace("https://", "").replace("http://", "")
+        if cleaned.startswith("www."):
+            cleaned = cleaned[4:]
+
+        variants = []
+        for candidate in [cleaned, cleaned.split("#")[0], cleaned.split("?")[0], cleaned.split("#")[0].split("?")[0]]:
+            if candidate and candidate not in variants:
+                variants.append(candidate)
+        return variants
+
+    def _get_service_url_fragments(self, service_key: str) -> List[str]:
+        fragments: List[str] = []
+        template = self.SERVICE_URLS.get(service_key)
+
+        if not template:
+            return fragments
+
+        potential_urls = set()
+        try:
+            potential_urls.add(template.format(region=self.region))
+        except Exception:
+            potential_urls.add(template)
+
+        # Additional fallbacks for templates with placeholders
+        potential_urls.add(template.replace("{region}.", ""))
+        potential_urls.add(template.replace("{region}", self.region))
+        potential_urls.add(template.replace("{region}", ""))
+
+        for candidate in potential_urls:
+            fragments.extend(self._normalized_url_variants(candidate))
+
+        # Deduplicate while preserving order
+        unique_fragments: List[str] = []
+        seen = set()
+        for fragment in fragments:
+            if fragment and fragment not in seen:
+                seen.add(fragment)
+                unique_fragments.append(fragment)
+
+        return unique_fragments
+
+    def _ensure_context(self, service_key: str, service_name: Optional[str]) -> ServiceContext:
+        if service_key not in self.service_contexts:
+            context = ServiceContext(service_name=service_name or service_key, normalized_key=service_key)
+            self.service_contexts[service_key] = context
+        else:
+            context = self.service_contexts[service_key]
+            if service_name and context.service_name != service_name:
+                context.service_name = service_name
+        return context
+
+    def _update_navigation_history(self, service_name: str):
+        if not self.navigation_history or self.navigation_history[-1] != service_name:
+            self.navigation_history.append(service_name)
+
+    def _record_service_visit(
+        self,
+        service_key: str,
+        service_name: str,
+        url: Optional[str] = None,
+        mode: str = "visit",
+    ) -> ServiceContext:
+        context = self._ensure_context(service_key, service_name)
+        context.last_url = url or self._safe_current_url()
+        context.last_mode = mode
+        context.last_visited = time.time()
+        context.log_event(f"{mode}: {context.last_url or 'current page'}")
+
+        self.current_service = service_name
+        self._update_navigation_history(service_name)
+        return context
+
+    def _page_contains_text(self, text: str) -> bool:
+        try:
+            page_source = (self.driver.page_source or "").lower()
+            return text.lower() in page_source
+        except Exception:
+            return False
+
+    def _reuse_existing_service_view(self, service_key: str, service_name: str) -> bool:
+        current_url = self._safe_current_url()
+        if not current_url:
+            return False
+
+        current_variants = self._normalized_url_variants(current_url)
+        fragments = self._get_service_url_fragments(service_key)
+
+        matched = any(
+            fragment in variant
+            for fragment in fragments
+            for variant in current_variants
+            if fragment and variant
+        )
+
+        context = self.service_contexts.get(service_key)
+        if not matched and context and context.last_url:
+            previous_variants = self._normalized_url_variants(context.last_url)
+            matched = any(
+                prev in variant or variant in prev
+                for prev in previous_variants
+                for variant in current_variants
+                if prev and variant
+            )
+
+        if not matched and service_name and len(service_name) > 1:
+            matched = self._page_contains_text(service_name)
+
+        if matched:
+            console.print(
+                f"[bold green]🔁 Reusing active {service_name} view within the existing AWS Console session[/bold green]"
+            )
+            self._record_service_visit(service_key, service_name, url=current_url, mode="reuse")
+            try:
+                self.driver.execute_script("window.scrollTo(0, 0);")
+            except Exception:
+                pass
+            return True
+
+        return False
+
+    def _update_current_service_tab(self, tab_name: str, event: str = "tab:click"):
+        if not tab_name or not self.current_service:
+            return
+
+        service_key = self._normalize_service_key(self.current_service)
+        if not service_key:
+            return
+
+        context = self._ensure_context(service_key, self.current_service)
+        context.last_tab = tab_name
+        context.log_event(f"{event}: {tab_name}")
+
+    def _record_available_tabs(self, service_key: Optional[str], tabs: List[str]):
+        if not service_key:
+            return
+
+        context = self._ensure_context(service_key, self.current_service or service_key)
+        context.available_tabs = list(tabs)
+        context.log_event(f"tabs-discovered: {len(tabs)}")
+
+    def _navigate_to_url(self, url: str) -> bool:
+        try:
             console.print(f"[cyan]🔗 Navigating via URL: {url[:80]}...[/cyan]")
             self.driver.get(url)
             time.sleep(3)
-            
-            self.current_service = service_name
-            self.navigation_history.append(service_name)
-            console.print(f"[green]✅ Navigated to {service_name}[/green]")
             return True
-        else:
-            console.print(f"[yellow]⚠️  Service '{service_name}' not in known services, trying search...[/yellow]")
-            return self._navigate_via_search(service_name)
+        except Exception as e:
+            console.print(f"[red]❌ URL navigation failed: {e}[/red]")
+            return False
+
+    # ==================== Public API ====================
+
+    def navigate_to_service(
+        self,
+        service_name: str,
+        use_search: bool = True,
+        tab: Optional[str] = None,
+        reuse_existing: bool = True,
+    ) -> bool:
+        """
+        Navigate to any AWS service.
+
+        Args:
+            service_name: Service name (e.g., 'RDS', 'EC2', 'Lambda')
+            use_search: If True, uses AWS Console search (faster, more human-like)
+            tab: Optional tab to select after navigation
+            reuse_existing: If True, reuses active service tab when already open
+
+        Returns:
+            True if navigation successful
+        """
+        service_key = self._normalize_service_key(service_name)
+
+        console.print(f"[bold cyan]🚀 Navigating to {service_name}...[/bold cyan]")
+
+        if reuse_existing and service_key and self._reuse_existing_service_view(service_key, service_name):
+            if tab:
+                self.click_tab(tab)
+            return True
+
+        navigation_mode = None
+        success = False
+        search_attempted = False
+
+        if use_search:
+            search_attempted = True
+            if self._navigate_via_search(service_name):
+                success = True
+                navigation_mode = "search"
+
+        if not success and service_key in self.SERVICE_URLS:
+            url = self.SERVICE_URLS[service_key].format(region=self.region)
+            if self._navigate_to_url(url):
+                console.print(f"[green]✅ Navigated to {service_name} via direct URL[/green]")
+                success = True
+                navigation_mode = "direct"
+
+        if not success:
+            if not search_attempted:
+                console.print(
+                    f"[yellow]⚠️  Service '{service_name}' not in known list, falling back to console search...[/yellow]"
+                )
+                if self._navigate_via_search(service_name):
+                    success = True
+                    navigation_mode = "search"
+            elif service_key not in self.SERVICE_URLS:
+                console.print(
+                    f"[yellow]⚠️  No direct URL for '{service_name}', retrying console search...[/yellow]"
+                )
+                if self._navigate_via_search(service_name):
+                    success = True
+                    navigation_mode = "search"
+
+        if not success:
+            console.print(f"[red]❌ Failed to navigate to {service_name}[/red]")
+            return False
+
+        # Record visit + optional tab navigation
+        visit_mode = f"navigate:{navigation_mode or 'unknown'}"
+        context_key = service_key or self._normalize_service_key(service_name) or service_name.lower()
+        self._record_service_visit(context_key, service_name, mode=visit_mode)
+
+        if tab:
+            self.click_tab(tab)
+
+        return True
     
     def _navigate_via_search(self, service_name: str) -> bool:
         """Navigate using AWS Console search (HUMAN-LIKE!)"""
@@ -252,7 +493,7 @@ class AWSUniversalServiceNavigator:
     def click_tab(self, tab_name: str) -> bool:
         """
         Click a tab on current page.
-        
+
         Works for ANY AWS service that has tabs!
         
         Args:
@@ -261,7 +502,11 @@ class AWSUniversalServiceNavigator:
         Returns:
             True if successful
         """
-        return self.tab_navigator.find_and_click_tab(tab_name)
+        success = self.tab_navigator.find_and_click_tab(tab_name)
+        if success:
+            resolved_tab = self.tab_navigator.last_clicked_tab or tab_name
+            self._update_current_service_tab(resolved_tab)
+        return success
     
     def explore_all_tabs(self, screenshot_callback: Optional[Callable] = None) -> Dict:
         """
@@ -275,7 +520,17 @@ class AWSUniversalServiceNavigator:
         Returns:
             Dict with results for each tab
         """
-        return self.tab_navigator.explore_all_tabs(screenshot_callback)
+        results = self.tab_navigator.explore_all_tabs(screenshot_callback)
+
+        if isinstance(results, dict) and results:
+            service_key = self._normalize_service_key(self.current_service)
+            if service_key:
+                self._record_available_tabs(service_key, list(results.keys()))
+                for tab_name, outcome in results.items():
+                    if isinstance(outcome, dict) and outcome.get("success"):
+                        self._update_current_service_tab(tab_name, event="tab:batch")
+
+        return results
     
     def navigate_multiple_services(self, services: List[str], screenshot_callback: Optional[Callable] = None) -> Dict:
         """
@@ -359,17 +614,30 @@ class AWSUniversalServiceNavigator:
                 console.print(f"[yellow]⚠️  Overview screenshot failed: {e}[/yellow]")
         
         # Step 3: Navigate tabs
+        service_key = self._normalize_service_key(self.current_service)
+
         if tabs:
             # Specific tabs provided
-            results["tabs"] = self.tab_navigator.click_multiple_tabs(tabs, screenshot_callback)
+            tab_results = self.tab_navigator.click_multiple_tabs(tabs, screenshot_callback)
+            if isinstance(tab_results, dict):
+                if service_key:
+                    self._record_available_tabs(service_key, list(tab_results.keys()))
+                for tab_name, outcome in tab_results.items():
+                    if isinstance(outcome, dict) and outcome.get("success"):
+                        self._update_current_service_tab(tab_name, event="tab:batch")
+            results["tabs"] = tab_results
         else:
             # Auto-discover all tabs
             console.print("[cyan]🔍 Auto-discovering tabs...[/cyan]")
-            results["tabs"] = self.tab_navigator.explore_all_tabs(screenshot_callback)
-        
+            results["tabs"] = self.explore_all_tabs(screenshot_callback)
+
         # Summary
-        total_tabs = len(results["tabs"])
-        successful_tabs = sum(1 for t in results["tabs"].values() if t.get("success"))
+        total_tabs = len(results["tabs"]) if isinstance(results["tabs"], dict) else 0
+        successful_tabs = (
+            sum(1 for t in results["tabs"].values() if isinstance(t, dict) and t.get("success"))
+            if isinstance(results["tabs"], dict)
+            else 0
+        )
         
         console.print(f"\n[bold green]{'='*60}[/bold green]")
         console.print(f"[bold green]✅ EVIDENCE COLLECTION COMPLETE[/bold green]")
@@ -478,11 +746,19 @@ class AWSUniversalServiceNavigator:
     
     def get_status(self) -> Dict:
         """Get current navigation status"""
+        current_context = None
+        if self.current_service:
+            service_key = self._normalize_service_key(self.current_service)
+            if service_key and service_key in self.service_contexts:
+                current_context = self.service_contexts[service_key].to_dict()
+
         return {
             "current_service": self.current_service,
             "region": self.region,
-            "navigation_history": self.navigation_history,
-            "current_url": self.driver.current_url
+            "navigation_history": list(self.navigation_history),
+            "current_url": self._safe_current_url(),
+            "cached_services": {key: ctx.to_dict() for key, ctx in self.service_contexts.items()},
+            "current_context": current_context,
         }
 
 
