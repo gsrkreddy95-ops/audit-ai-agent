@@ -421,15 +421,43 @@ class UniversalScreenshotEnhanced:
                                     'awsui-card',
                                 ]
                                 
+                                skip_phrases = [
+                                    "sign into new session",
+                                    "sign in to new session",
+                                    "start new session",
+                                    "new session",
+                                    "different user",
+                                    "different account",
+                                ]
+
                                 for selector in session_selectors:
                                     try:
                                         console.print(f"[dim]      Trying: {selector}[/dim]")
                                         session_locator = page.locator(selector).first
-                                        if session_locator.is_visible(timeout=2000):
-                                            session_locator.click(force=True, timeout=3000)
-                                            console.print(f"[green]   ✅ Clicked session (Playwright: {selector})![/green]")
-                                            clicked = True
-                                            break
+                                        if not session_locator.is_visible(timeout=2000):
+                                            continue
+
+                                        locator_text = ""
+                                        try:
+                                            locator_text = session_locator.inner_text(timeout=1000) or ""
+                                        except Exception:
+                                            try:
+                                                locator_text = session_locator.text_content(timeout=1000) or ""
+                                            except Exception:
+                                                locator_text = ""
+
+                                        lowered_text = locator_text.lower()
+                                        if any(phrase in lowered_text for phrase in skip_phrases):
+                                            preview = locator_text.strip().replace("\n", " ")[:60]
+                                            console.print(
+                                                f"[dim]      Skipping selector (looks like new session option): {preview}[/dim]"
+                                            )
+                                            continue
+
+                                        session_locator.click(force=True, timeout=3000)
+                                        console.print(f"[green]   ✅ Clicked session (Playwright: {selector})![/green]")
+                                        clicked = True
+                                        break
                                     except Exception as sel_e:
                                         console.print(f"[dim]      {selector[:30]} failed: {str(sel_e)[:30]}[/dim]")
                                         continue
@@ -455,6 +483,12 @@ class UniversalScreenshotEnhanced:
                                     for (var i = 0; i < allLinks.length; i++) {
                                         var link = allLinks[i];
                                         var text = normalize(link.textContent);
+                                        if (!text) {
+                                            continue;
+                                        }
+                                        if (text.includes('new session') || text.includes('start new session') || text.includes('different user') || text.includes('different account')) {
+                                            continue;
+                                        }
                                         if (text.includes(accountName) && link.href.includes('console')) {
                                             console.log('Found account link:', link.textContent);
                                             link.click();
@@ -463,33 +497,70 @@ class UniversalScreenshotEnhanced:
                                     }
                                 }
 
-                                // Fallback 1: Click first console link
+                                // Fallback 1: Click first console link (skip new session/different user)
                                 var consoleLinks = document.querySelectorAll('a[href*="console"]');
                                 console.log('Found', consoleLinks.length, 'console links');
                                 if (consoleLinks.length > 0) {
-                                    console.log('Clicking first console link');
-                                    consoleLinks[0].click();
-                                    return 'console-link';
+                                    for (var c = 0; c < consoleLinks.length; c++) {
+                                        var consoleLink = consoleLinks[c];
+                                        var consoleText = normalize(consoleLink.textContent);
+                                        if (consoleText && (consoleText.includes('new session') || consoleText.includes('start new session') || consoleText.includes('different user') || consoleText.includes('different account'))) {
+                                            console.log('Skipping console link (new/different session):', consoleText);
+                                            continue;
+                                        }
+                                        console.log('Clicking console link candidate');
+                                        consoleLink.click();
+                                        return 'console-link';
+                                    }
                                 }
 
-                                // Fallback 2: Click session tiles/buttons (new oauth UI)
+                                // Fallback 2: Click session tiles/buttons (new oauth UI) - prefer existing session
                                 var sessionButtons = document.querySelectorAll('[data-testid*="session"], [data-testid*="account-card"], button.awsui-card, a.awsui-card, awsui-card, awsui-card a, awsui-card button, awsui-table-row, awsui-table-row a, awsui-table-row button');
                                 console.log('Found', sessionButtons.length, 'session buttons/cards');
                                 if (sessionButtons.length > 0) {
-                                    console.log('Clicking first session button/card');
-                                    var button = sessionButtons[0];
-                                    if (button) {
-                                        if (typeof button.click === 'function') {
-                                            button.click();
+                                    var preferredSessionButton = null;
+                                    var genericSessionButton = null;
+
+                                    for (var s = 0; s < sessionButtons.length; s++) {
+                                        var button = sessionButtons[s];
+                                        if (!button) {
+                                            continue;
+                                        }
+                                        var buttonText = normalize(button.textContent);
+                                        if (buttonText) {
+                                            if (buttonText.includes('new session') || buttonText.includes('start new session') || buttonText.includes('different user') || buttonText.includes('different account')) {
+                                                console.log('Skipping session option (new/different):', buttonText);
+                                                continue;
+                                            }
+                                            if (accountName && buttonText.includes(accountName)) {
+                                                preferredSessionButton = button;
+                                                break;
+                                            }
+                                            if (!preferredSessionButton && (buttonText.includes('use this session') || buttonText.includes('use existing session') || buttonText.includes('continue with this session') || buttonText.includes('existing session'))) {
+                                                preferredSessionButton = button;
+                                            }
+                                            if (!genericSessionButton) {
+                                                genericSessionButton = button;
+                                            }
+                                        } else if (!genericSessionButton) {
+                                            genericSessionButton = button;
+                                        }
+                                    }
+
+                                    var buttonToClick = preferredSessionButton || genericSessionButton;
+                                    if (buttonToClick) {
+                                        console.log('Clicking filtered session button/card');
+                                        if (typeof buttonToClick.click === 'function') {
+                                            buttonToClick.click();
                                             return 'session-tile';
                                         }
-                                        var inner = button.querySelector('button, a');
+                                        var inner = buttonToClick.querySelector('button, a');
                                         if (inner && typeof inner.click === 'function') {
                                             inner.click();
                                             return 'session-tile';
                                         }
                                         var event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-                                        button.dispatchEvent(event);
+                                        buttonToClick.dispatchEvent(event);
                                         return 'session-tile';
                                     }
                                 }
@@ -551,7 +622,7 @@ class UniversalScreenshotEnhanced:
                                 for (var j = 0; j < primaryButtons.length; j++) {
                                     var btn = primaryButtons[j];
                                     var btnText = normalize(btn.textContent);
-                                    if (btnText.includes('different user')) {
+                                    if (btnText.includes('different user') || btnText.includes('different account')) {
                                         continue;
                                     }
                                     if (btnText.includes('use this session') || btnText.includes('use existing session') || btnText.includes('continue with this session') || btnText.includes('existing session')) {
