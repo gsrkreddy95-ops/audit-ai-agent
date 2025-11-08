@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Callable, TYPE_CHECKING
 from enum import Enum
+from urllib.parse import urlparse
 import io
 
 try:
@@ -387,11 +388,20 @@ class UniversalScreenshotEnhanced:
                     console.print(f"[green]✅ Already on AWS Console! (Session active)[/green]")
                     return True
                 
-                # Case 2: On session selector - Click the session and VERIFY!
-                # Match with or without region prefix (us-east-1.signin.aws.amazon.com or signin.aws.amazon.com)
-                if current_url and '/sessions/selector' in current_url and 'aws.amazon.com' in current_url:
-                    console.print(f"[yellow]⚠️  AWS session selector detected - auto-clicking session...[/yellow]")
-                    
+                # Case 2: On session selector / Choose session page - Click the session and VERIFY!
+                # Handles both classic selector URL and newer oauth-based "Choose your AWS session" screen
+                page_source = None
+                try:
+                    page_source = self.driver.page_source
+                except Exception:
+                    if self.debug:
+                        console.print("[dim]   Unable to read page source for session detection[/dim]")
+
+                if self._is_session_selector_page(current_url, page_source):
+                    console.print(
+                        f"[yellow]⚠️  AWS session selector detected - auto-clicking session...[/yellow]"
+                    )
+
                     clicked = False
                     
                     # Strategy 1: Playwright (get CURRENT page, not stale!)
@@ -405,7 +415,10 @@ class UniversalScreenshotEnhanced:
                                 session_selectors = [
                                     f'a:has-text("{account_name}")',  # Exact text match
                                     f'a[href*="console"]:has-text("{account_name}")',  # Link to console with account name
+                                    f'awsui-card:has-text("{account_name}")',  # New OAuth card layout
+                                    f'[data-testid*="session"]:has-text("{account_name}")',
                                     'a[href*="console"]',  # Any console link (first one)
+                                    'awsui-card',
                                 ]
                                 
                                 for selector in session_selectors:
@@ -429,24 +442,28 @@ class UniversalScreenshotEnhanced:
                             console.print(f"[dim]   Strategy 2: JavaScript with smart search...[/dim]")
                             # Click the session link (prefer account name match)
                             clicked_js = self.driver.execute_script("""
-                                var accountName = arguments[0];
+                                var accountName = (arguments[0] || '').toLowerCase();
                                 console.log('Looking for session link, account:', accountName);
-                                
+
+                                function normalize(text) {
+                                    return (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                                }
+
                                 // First try: Find link with account name
                                 if (accountName) {
                                     var allLinks = document.querySelectorAll('a');
                                     for (var i = 0; i < allLinks.length; i++) {
                                         var link = allLinks[i];
-                                        var text = (link.textContent || '').toLowerCase();
-                                        if (text.includes(accountName.toLowerCase()) && link.href.includes('console')) {
+                                        var text = normalize(link.textContent);
+                                        if (text.includes(accountName) && link.href.includes('console')) {
                                             console.log('Found account link:', link.textContent);
                                             link.click();
                                             return true;
                                         }
                                     }
                                 }
-                                
-                                // Fallback: Click first console link
+
+                                // Fallback 1: Click first console link
                                 var consoleLinks = document.querySelectorAll('a[href*="console"]');
                                 console.log('Found', consoleLinks.length, 'console links');
                                 if (consoleLinks.length > 0) {
@@ -454,7 +471,46 @@ class UniversalScreenshotEnhanced:
                                     consoleLinks[0].click();
                                     return true;
                                 }
-                                
+
+                                // Fallback 2: Click session tiles/buttons (new oauth UI)
+                                var sessionButtons = document.querySelectorAll('[data-testid*="session"], [data-testid*="account-card"], button.awsui-card, a.awsui-card, awsui-card, awsui-card a, awsui-card button, awsui-table-row, awsui-table-row a, awsui-table-row button');
+                                console.log('Found', sessionButtons.length, 'session buttons/cards');
+                                if (sessionButtons.length > 0) {
+                                    console.log('Clicking first session button/card');
+                                    var button = sessionButtons[0];
+                                    if (button) {
+                                        if (typeof button.click === 'function') {
+                                            button.click();
+                                            return true;
+                                        }
+                                        var inner = button.querySelector('button, a');
+                                        if (inner && typeof inner.click === 'function') {
+                                            inner.click();
+                                            return true;
+                                        }
+                                        var event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                                        button.dispatchEvent(event);
+                                        return true;
+                                    }
+                                }
+
+                                // Fallback 3: Click first primary button with helpful text
+                                var primaryButtons = document.querySelectorAll('button, a');
+                                for (var j = 0; j < primaryButtons.length; j++) {
+                                    var btn = primaryButtons[j];
+                                    var btnText = normalize(btn.textContent);
+                                    if (btnText.includes('different user')) {
+                                        continue;
+                                    }
+                                    if (btnText.includes('sign in') || btnText.includes('use this session') || btnText.includes('continue')) {
+                                        console.log('Clicking fallback primary button:', btnText);
+                                        if (typeof btn.click === 'function') {
+                                            btn.click();
+                                            return true;
+                                        }
+                                    }
+                                }
+
                                 return false;
                             """, account_name)
                             if clicked_js:
@@ -2010,7 +2066,40 @@ class UniversalScreenshotEnhanced:
                 
         except Exception as e:
             console.print(f"[yellow]⚠️  Error closing browser: {str(e)[:80]}[/yellow]")
-    
+
+    def _is_session_selector_page(self, url: Optional[str], page_source: Optional[str] = None) -> bool:
+        """Return True if the current URL/page appears to be the AWS session chooser."""
+        if not url:
+            return False
+
+        parsed = urlparse(url)
+        host = parsed.netloc.lower()
+        path = parsed.path.lower()
+        query = parsed.query.lower()
+
+        if 'sessions/selector' in path and 'aws.amazon.com' in host:
+            return True
+
+        if 'signin.aws.amazon.com' in host:
+            if '/console/oauth' in path or '/oauth' in path:
+                return True
+            if 'client_id=arn:aws:signin:::console' in query:
+                return True
+
+        if page_source:
+            lowered = page_source.lower()
+            keywords = (
+                'choose your aws session',
+                'choose your aws account',
+                'select your aws account',
+                'select your aws role',
+                'use this session',
+            )
+            if any(keyword in lowered for keyword in keywords):
+                return True
+
+        return False
+
     def _clear_aws_cookies_from_disk(self):
         """Clear AWS-related cookies from the persistent user data directory"""
         try:
