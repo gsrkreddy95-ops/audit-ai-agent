@@ -572,6 +572,30 @@ class BrowserSessionManager:
             if detected:
                 cls._current_region = detected
                 cls._last_authenticated_region = detected
+
+            # Final fallback: force console home to requested region
+            fallback_url = f"https://{new_region}.console.aws.amazon.com/console/home?region={new_region}"
+            console.print("[cyan]🔁 Forcing region via console home URL fallback...[/cyan]")
+            try:
+                browser.driver.get(fallback_url)
+                time.sleep(3)
+                detected = cls._detect_current_region(browser)
+                if detected == new_region:
+                    cls._current_region = detected
+                    cls._last_authenticated_region = detected
+                    cls._dismiss_cookie_banner(browser)
+                    console.print(f"[green]✅ Region changed to {new_region} using fallback navigation[/green]")
+                    return True
+            except Exception as nav_exc:
+                if cls._is_invalid_session_error(nav_exc):
+                    cls._handle_invalid_session("Region fallback navigation lost the browser session.", nav_exc)
+                    if allow_retry and cls._last_authenticated_account:
+                        console.print("[cyan]🔁 Re-authenticating before retrying region change fallback...[/cyan]")
+                        if cls.authenticate_aws(account=cls._last_authenticated_account, region=new_region):
+                            return cls.change_region(new_region, allow_retry=False)
+                    return False
+                console.print(f"[yellow]⚠️  Region fallback navigation failed: {nav_exc}[/yellow]")
+
             return False
 
         except Exception as e:

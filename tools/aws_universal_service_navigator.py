@@ -155,6 +155,41 @@ class AWSUniversalServiceNavigator:
                 variants.append(candidate)
         return variants
 
+    def _url_matches_service(self, service_key: Optional[str], url: Optional[str] = None, service_name: Optional[str] = None) -> bool:
+        """Return True when the supplied URL clearly points at the target service."""
+
+        if not url:
+            url = self._safe_current_url()
+
+        if not url or not service_key:
+            # Fall back to simple service-name heuristic only when nothing else available
+            if service_name:
+                sanitized_name = service_name.strip().lower().replace(" ", "-")
+                return sanitized_name and sanitized_name in (url or "").lower()
+            return False
+
+        variants = self._normalized_url_variants(url)
+        if not variants:
+            return False
+
+        fragments = self._get_service_url_fragments(service_key)
+        normalized_key = service_key.replace("-", "")
+
+        for variant in variants:
+            if not variant:
+                continue
+
+            # Direct fragment match (covers explicit service console paths)
+            if any(fragment and fragment in variant for fragment in fragments):
+                return True
+
+            # Fallback: ensure the service key appears in the path portion
+            path_bits = variant.split("/", 1)[-1]
+            if normalized_key and normalized_key in path_bits.replace("-", ""):
+                return True
+
+        return False
+
     def _get_service_url_fragments(self, service_key: str) -> List[str]:
         fragments: List[str] = []
         template = self.SERVICE_URLS.get(service_key)
@@ -232,22 +267,11 @@ class AWSUniversalServiceNavigator:
         current_variants = self._normalized_url_variants(current_url)
         fragments = self._get_service_url_fragments(service_key)
 
-        matched = any(
-            fragment in variant
-            for fragment in fragments
-            for variant in current_variants
-            if fragment and variant
-        )
+        matched = self._url_matches_service(service_key, url=current_url, service_name=service_name)
 
         context = self.service_contexts.get(service_key)
         if not matched and context and context.last_url:
-            previous_variants = self._normalized_url_variants(context.last_url)
-            matched = any(
-                prev in variant or variant in prev
-                for prev in previous_variants
-                for variant in current_variants
-                if prev and variant
-            )
+            matched = self._url_matches_service(service_key, url=context.last_url, service_name=service_name)
 
         if not matched and service_name and len(service_name) > 1:
             matched = self._page_contains_text(service_name)
@@ -285,11 +309,27 @@ class AWSUniversalServiceNavigator:
         context.available_tabs = list(tabs)
         context.log_event(f"tabs-discovered: {len(tabs)}")
 
-    def _navigate_to_url(self, url: str) -> bool:
+    def _navigate_to_url(
+        self,
+        url: str,
+        *,
+        service_key: Optional[str] = None,
+        service_name: Optional[str] = None,
+        wait_seconds: int = 3,
+    ) -> bool:
         try:
             console.print(f"[cyan]🔗 Navigating via URL: {url[:80]}...[/cyan]")
             self.driver.get(url)
-            time.sleep(3)
+            time.sleep(wait_seconds)
+
+            if service_key:
+                if self._url_matches_service(service_key, service_name=service_name):
+                    return True
+                console.print(
+                    f"[yellow]⚠️  URL navigation reached unexpected page: {self._safe_current_url()}[/yellow]"
+                )
+                return False
+
             return True
         except Exception as e:
             console.print(f"[red]❌ URL navigation failed: {e}[/red]")
@@ -331,13 +371,13 @@ class AWSUniversalServiceNavigator:
 
         if use_search:
             search_attempted = True
-            if self._navigate_via_search(service_name):
+            if self._navigate_via_search(service_name, service_key=service_key):
                 success = True
                 navigation_mode = "search"
 
         if not success and service_key in self.SERVICE_URLS:
             url = self.SERVICE_URLS[service_key].format(region=self.region)
-            if self._navigate_to_url(url):
+            if self._navigate_to_url(url, service_key=service_key, service_name=service_name):
                 console.print(f"[green]✅ Navigated to {service_name} via direct URL[/green]")
                 success = True
                 navigation_mode = "direct"
@@ -347,14 +387,14 @@ class AWSUniversalServiceNavigator:
                 console.print(
                     f"[yellow]⚠️  Service '{service_name}' not in known list, falling back to console search...[/yellow]"
                 )
-                if self._navigate_via_search(service_name):
+                if self._navigate_via_search(service_name, service_key=service_key):
                     success = True
                     navigation_mode = "search"
             elif service_key not in self.SERVICE_URLS:
                 console.print(
                     f"[yellow]⚠️  No direct URL for '{service_name}', retrying console search...[/yellow]"
                 )
-                if self._navigate_via_search(service_name):
+                if self._navigate_via_search(service_name, service_key=service_key):
                     success = True
                     navigation_mode = "search"
 
@@ -372,11 +412,11 @@ class AWSUniversalServiceNavigator:
 
         return True
     
-    def _navigate_via_search(self, service_name: str) -> bool:
+    def _navigate_via_search(self, service_name: str, service_key: Optional[str] = None) -> bool:
         """Navigate using AWS Console search (HUMAN-LIKE!)"""
         try:
             console.print(f"[cyan]🔍 Using AWS Console search for '{service_name}'...[/cyan]")
-            
+
             result = self.driver.execute_script("""
                 var serviceName = arguments[0];
                 console.log('=== AWS Console Search ===');
@@ -435,7 +475,7 @@ class AWSUniversalServiceNavigator:
             time.sleep(4)  # Wait for navigation
             
             current_url = self.driver.current_url
-            if service_name.lower() in current_url.lower() or 'console.aws.amazon.com' in current_url:
+            if self._url_matches_service(service_key, url=current_url, service_name=service_name):
                 console.print(f"[green]✅ Search navigation successful![/green]")
                 return True
             else:
