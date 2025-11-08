@@ -1,0 +1,103 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Credentials and Secrets
+.env
+.env.local
+*.pem
+*.key
+*.crt
+credentials.json
+secrets.json
+config/credentials.yaml
+config/secrets.yaml
+
+# AWS
+.aws/
+aws_credentials.json
+*.credentials
+
+# Browser Data
+.aws_browser_profile/
+browser_data/
+user_data_dir/
+
+# Screenshots (optional - you might want to track these)
+screenshots/*.png
+screenshots/*.jpg
+evidence/*.png
+evidence/*.jpg
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# Evidence (don't commit actual evidence to GitHub)
+audit-evidence/
+/Users/krishna/Documents/audit-evidence/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Session data
+session_data/
+cookies/

@@ -1,0 +1,203 @@
+# RFI (Request for Information) Mapping Configuration
+# Maps audit requirements to RFI folder codes and collection strategies
+
+rfi_mappings:
+  # AWS Evidence
+  "10.1.2.12":
+    description: "RDS Database Configuration"
+    services:
+      - aws_rds
+    evidence_types:
+      - screenshots
+      - api_exports
+    collection:
+      - rds_instance_configs
+      - rds_cluster_configs
+      - rds_snapshots
+      - rds_parameter_groups
+  
+  "10.1.2.17":
+    description: "EC2 Instance Configuration"
+    services:
+      - aws_ec2
+    evidence_types:
+      - screenshots
+      - api_exports
+    collection:
+      - ec2_instances
+      - security_groups
+      - key_pairs
+      - ami_list
+  
+  "10.1.2.3":
+    description: "IAM Access Controls"
+    services:
+      - aws_iam
+    evidence_types:
+      - api_exports
+      - screenshots
+    collection:
+      - iam_users
+      - iam_roles
+      - iam_policies
+      - mfa_status
+  
+  "10.1.2.5":
+    description: "Network Security Configuration"
+    services:
+      - aws_vpc
+      - aws_security_groups
+    evidence_types:
+      - screenshots
+      - api_exports
+    collection:
+      - vpc_configs
+      - security_groups
+      - network_acls
+      - route_tables
+  
+  "10.1.2.6":
+    description: "Logging and Monitoring"
+    services:
+      - aws_cloudtrail
+      - aws_cloudwatch
+      - datadog
+      - splunk
+    evidence_types:
+      - screenshots
+      - api_exports
+      - log_samples
+    collection:
+      - cloudtrail_trails
+      - cloudwatch_alarms
+      - log_groups
+  
+  "10.1.2.9":
+    description: "Backup and Recovery"
+    services:
+      - aws_backup
+      - aws_rds
+    evidence_types:
+      - screenshots
+      - api_exports
+    collection:
+      - backup_plans
+      - backup_vaults
+      - rds_snapshots
+      - recovery_points
+  
+  "11.2.4.7":
+    description: "Container Security (Kubernetes)"
+    services:
+      - kubernetes
+      - wiz
+    evidence_types:
+      - api_exports
+      - screenshots
+    collection:
+      - k8s_pods
+      - k8s_services
+      - k8s_security_policies
+      - container_images
+  
+  "12.1.2.14":
+    description: "Incident Management"
+    services:
+      - pagerduty
+      - webex
+    evidence_types:
+      - api_exports
+      - screenshots
+    collection:
+      - incident_list
+      - escalation_policies
+      - on_call_schedules
+  
+  "12.1.4.1":
+    description: "Change Management"
+    services:
+      - jira
+      - confluence
+      - github
+    evidence_types:
+      - api_exports
+      - pdf_exports
+    collection:
+      - change_tickets
+      - approval_workflows
+      - deployment_records
+  
+  "12.1.4.7":
+    description: "Security Monitoring"
+    services:
+      - wiz
+      - datadog
+      - splunk
+      - elasticsearch
+    evidence_types:
+      - screenshots
+      - api_exports
+      - dashboards
+    collection:
+      - security_alerts
+      - compliance_scans
+      - vulnerability_reports
+  
+  "#164 - Reference":
+    description: "General Reference Documentation"
+    services:
+      - confluence
+      - sharepoint
+    evidence_types:
+      - pdf_exports
+      - screenshots
+    collection:
+      - policies
+      - procedures
+      - runbooks
+  
+  "CSE and Orbital":
+    description: "CSE and Orbital Service Evidence"
+    services:
+      - aws_ec2
+      - aws_rds
+      - datadog
+    evidence_types:
+      - screenshots
+      - api_exports
+    collection:
+      - service_configs
+      - monitoring_dashboards
+  
+  "DC Controls":
+    description: "Data Center Controls"
+    services:
+      - aws_regions
+      - compliance_reports
+    evidence_types:
+      - pdf_exports
+      - api_exports
+    collection:
+      - region_compliance
+      - data_residency
+      - physical_security
+  
+  "TD&R ISMAP Audit Docs":
+    description: "ISMAP Audit Master Documentation"
+    services:
+      - all
+    evidence_types:
+      - pdf_exports
+      - screenshots
+      - api_exports
+    collection:
+      - master_evidence_index
+      - audit_trail
+      - compliance_matrix
+
+# Default mapping for unknown requirements
+default_rfi:
+  folder: "Miscellaneous Evidence"
+  create_if_missing: true
+  warn_user: true
+

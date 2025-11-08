@@ -1,0 +1,178 @@
+"""
+Interactive Chat Interface for AuditMate AI Agent
+Provides a user-friendly terminal chat experience
+"""
+
+import os
+import sys
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
+from rich.prompt import Prompt
+from dotenv import load_dotenv
+
+# Add parent directory to path
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from ai_brain.intelligent_agent import IntelligentAgent
+
+console = Console()
+
+def print_welcome():
+    """Print welcome banner"""
+    welcome_text = """
+# 👋 Hi! I'm AuditMate
+
+Your intelligent AI assistant for audit evidence collection, powered by Claude 3.5 Sonnet.
+
+I can help you collect screenshots, export data, debug issues, and even generate new features on the fly. 
+Just ask me anything - I'm here to make audit season easier!
+
+💬 **Ask me:**
+- "What can you do?"
+- "Take a screenshot of RDS cluster X"
+- "What evidence do I need for RFI BCR-06.01?"
+
+Type **'help'** for commands or just start chatting naturally!
+"""
+    console.print(Panel(Markdown(welcome_text), title="AuditMate", border_style="cyan"))
+
+def print_help():
+    """Print help information"""
+    help_text = """
+## 💬 How to Talk to Me:
+
+I understand natural language! Just ask me what you need. Here are some examples:
+
+### 📸 Evidence Collection:
+- "Take a screenshot of RDS cluster prod-xdr-01"
+- "Export S3 bucket list to CSV for ctr-prod account"
+- "Collect evidence for RFI BCR-06.01 under XDR Platform"
+- "What evidence exists for this RFI from last year?"
+
+### 📁 Evidence Management:
+- **"review"** / **"show evidence"** - See what we've collected
+- **"open folder"** / **"open evidence"** - Open evidence folder in Finder
+- **"upload"** - Upload collected evidence to SharePoint FY2025
+
+### 🔐 Authentication:
+- "Refresh my AWS authentication"
+- "Check my auth status"
+
+### 💡 Questions & Help:
+- "What can you do?"
+- "How does this work?"
+- "What AWS services do you support?"
+- "Can you help me with [topic]?"
+- "Why did [X] fail?"
+
+### 🔧 Debugging & Fixes:
+- Just paste any error and say "fix this"
+- "Debug the screenshot issue"
+- "Add support for DynamoDB"
+
+### 🛠️ Utilities:
+- **help** - Show this help
+- **clear** - Clear conversation history
+- **status** - Show agent status
+- **quit** / **exit** - Exit the agent
+
+### 📋 Typical Workflow:
+1. Ask me to collect evidence (I save it locally first)
+2. Type **"review"** to see what we collected
+3. Type **"open evidence"** to review files yourself
+4. Type **"upload"** when ready to push to SharePoint
+
+**Remember:** You can ask me anything! I'm conversational like ChatGPT or Claude. 😊
+"""
+    console.print(Panel(Markdown(help_text), title="How to Use AuditMate", border_style="green"))
+
+def main():
+    """Main chat loop"""
+    # Load environment variables
+    load_dotenv()
+    
+    # Print welcome
+    print_welcome()
+    
+    # Initialize intelligent agent (uses Claude's function calling)
+    console.print("\n[cyan]🔄 Initializing Intelligent Agent...[/cyan]")
+    try:
+        agent = IntelligentAgent()
+    except Exception as e:
+        console.print(f"[red]❌ Failed to initialize: {e}[/red]")
+        console.print(f"[yellow]Check your .env file configuration[/yellow]")
+        sys.exit(1)
+    
+    # Show initial prompt
+    console.print("[bold cyan]💬 How can I help you today?[/bold cyan]")
+    
+    # Main chat loop
+    while True:
+        try:
+            # Get user input
+            user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+            
+            if not user_input.strip():
+                continue
+            
+            # Handle special commands
+            user_input_lower = user_input.lower().strip()
+            
+            if user_input_lower in ['quit', 'exit', 'q']:
+                console.print("\n[yellow]👋 Goodbye![/yellow]\n")
+                break
+            
+            elif user_input_lower == 'help':
+                print_help()
+                continue
+            
+            elif user_input_lower == 'clear':
+                agent.clear_memory()
+                console.clear()
+                print_welcome()
+                continue
+            
+            elif user_input_lower == 'status':
+                console.print("\n[green]✅ Agent Status: Online[/green]")
+                console.print(f"[cyan]Conversation turns: {len(agent.get_conversation_history())}[/cyan]")
+                console.print(f"[cyan]Evidence directory: {agent.evidence_manager.evidence_dir}[/cyan]")
+                continue
+            
+            elif user_input_lower == 'review' or user_input_lower == 'show evidence':
+                # Show collected evidence
+                agent.evidence_manager.display_evidence_summary()
+                continue
+            
+            elif user_input_lower == 'open evidence' or user_input_lower == 'open folder':
+                # Open evidence folder in Finder
+                agent.evidence_manager.open_evidence_folder()
+                continue
+            
+            elif user_input_lower == 'upload':
+                # Trigger upload approval workflow
+                if agent.evidence_manager.prompt_for_upload_approval():
+                    console.print("[cyan]🔄 Initiating SharePoint upload...[/cyan]")
+                    console.print("[yellow]⚠️  SharePoint upload integration pending implementation[/yellow]")
+                continue
+            
+            # Process user request with agent
+            response = agent.chat(user_input)
+            
+            # Display response
+            console.print(f"\n[green]{response}[/green]\n")
+        
+        except KeyboardInterrupt:
+            console.print("\n\n[yellow]👋 Interrupted. Goodbye![/yellow]\n")
+            break
+        
+        except Exception as e:
+            console.print(f"\n[red]❌ Error: {e}[/red]\n")
+            continue
+    
+    # Cleanup on exit
+    agent.cleanup()
+
+if __name__ == "__main__":
+    main()
+

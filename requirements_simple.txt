@@ -1,0 +1,38 @@
+# Simplified Core Dependencies
+python-dotenv
+pydantic
+pydantic-settings
+
+# AWS Integration
+boto3
+botocore
+
+# LangChain & AI (let pip resolve versions)
+langchain
+langchain-aws
+langchain-openai
+langchain-anthropic
+
+# OCR & Image Processing
+pytesseract
+Pillow
+opencv-python
+numpy
+
+# CLI & UI
+rich
+typer
+
+# HTTP & API
+requests
+aiohttp
+
+# Logging
+loguru
+
+# Document Processing
+python-docx
+PyPDF2
+pandas
+openpyxl
+
