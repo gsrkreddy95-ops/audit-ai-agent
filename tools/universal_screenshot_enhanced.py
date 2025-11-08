@@ -7,6 +7,7 @@ Works across AWS, Azure, Kubernetes, Datadog, Splunk, ServiceNow, etc.
 import os
 import time
 import re
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Callable, TYPE_CHECKING
@@ -248,7 +249,7 @@ class UniversalScreenshotEnhanced:
         """Get the current active Playwright page (handles navigation)"""
         if not PLAYWRIGHT_AVAILABLE or not self.browser_pw:
             return None
-        
+
         try:
             # Get all contexts and find the active page
             contexts = self.browser_pw.contexts
@@ -260,8 +261,262 @@ class UniversalScreenshotEnhanced:
                         return pages[-1]
         except:
             pass
-        
+
         return None
+
+    def _click_session_with_playwright(self, account_name: Optional[str]) -> Tuple[bool, Optional[str]]:
+        """Attempt to click the AWS session using Playwright selectors."""
+        if not account_name or not PLAYWRIGHT_AVAILABLE:
+            return False, None
+
+        page = self._get_current_playwright_page()
+        if not page:
+            return False, None
+
+        selectors = [
+            f'a:has-text("{account_name}")',
+            f'a[href*="console"]:has-text("{account_name}")',
+            f'awsui-card:has-text("{account_name}")',
+            f'[data-testid*="session"]:has-text("{account_name}")',
+            'a[href*="console"]',
+            'awsui-card',
+        ]
+
+        for selector in selectors:
+            try:
+                if self.debug:
+                    console.print(f"[dim]      Playwright trying: {selector}[/dim]")
+                session_locator = page.locator(selector).first
+                if session_locator.is_visible(timeout=2000):
+                    session_locator.click(force=True, timeout=3000)
+                    return True, f"playwright:{selector}"
+            except Exception as error:
+                if self.debug:
+                    console.print(f"[dim]      {selector[:40]} failed: {str(error)[:60]}[/dim]")
+
+        return False, None
+
+    def _click_session_with_javascript(self, account_name: Optional[str]) -> Tuple[bool, Optional[str]]:
+        """Use a JavaScript fallback to click an AWS session button or link."""
+        if not self.driver:
+            return False, None
+
+        script = """
+            return (function(accountNameRaw) {
+                var accountName = (accountNameRaw || '').toLowerCase();
+                var result = {clicked: false, strategy: null, log: []};
+
+                function normalize(text) {
+                    return (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                }
+
+                function record(message) {
+                    try { console.log(message); } catch (e) {}
+                    result.log.push(message);
+                }
+
+                function attemptClick(element, strategy) {
+                    if (!element) {
+                        return false;
+                    }
+
+                    var target = element;
+                    if (element.shadowRoot && element.shadowRoot.querySelector) {
+                        var primary = element.shadowRoot.querySelector('button, a');
+                        if (primary) {
+                            target = primary;
+                        }
+                    }
+
+                    try {
+                        if (typeof target.click === 'function') {
+                            target.click();
+                        } else {
+                            var evt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                            target.dispatchEvent(evt);
+                        }
+                        result.clicked = true;
+                        result.strategy = strategy;
+                        record('Clicked via ' + strategy);
+                        return true;
+                    } catch (err) {
+                        record('Failed to click ' + strategy + ': ' + err);
+                        return false;
+                    }
+                }
+
+                if (accountName) {
+                    var accountLinks = document.querySelectorAll('a[href*="console"]');
+                    for (var i = 0; i < accountLinks.length; i++) {
+                        var link = accountLinks[i];
+                        if (normalize(link.textContent).includes(accountName)) {
+                            if (attemptClick(link, 'account-link')) {
+                                return JSON.stringify(result);
+                            }
+                        }
+                    }
+                }
+
+                var consoleLinks = document.querySelectorAll('a[href*="console"]');
+                if (consoleLinks.length > 0) {
+                    if (attemptClick(consoleLinks[0], 'console-link')) {
+                        return JSON.stringify(result);
+                    }
+                }
+
+                var sessionButtons = document.querySelectorAll('[data-testid*="session"], [data-testid*="account-card"], button.awsui-card, a.awsui-card, awsui-card, awsui-card a, awsui-card button, awsui-table-row, awsui-table-row a, awsui-table-row button');
+                if (sessionButtons.length > 0) {
+                    var button = sessionButtons[0];
+                    if (attemptClick(button, 'session-tile')) {
+                        return JSON.stringify(result);
+                    }
+                }
+
+                var awsuiButtons = Array.from(document.querySelectorAll('awsui-button'));
+                var existingCandidate = null;
+                var genericCandidate = null;
+                var newCandidate = null;
+
+                awsuiButtons.forEach(function(btn) {
+                    var text = '';
+                    if (btn.textContent) {
+                        text = btn.textContent;
+                    } else if (btn.shadowRoot) {
+                        var shadowTextEl = btn.shadowRoot.querySelector('button, a, span');
+                        if (shadowTextEl) {
+                            text = shadowTextEl.textContent;
+                        }
+                    }
+
+                    var normalized = normalize(text);
+                    if (!normalized) {
+                        return;
+                    }
+
+                    if (!existingCandidate && (normalized.includes('use this session') || normalized.includes('use existing session') || normalized.includes('continue with this session') || normalized.includes('existing session'))) {
+                        existingCandidate = btn;
+                        return;
+                    }
+
+                    if (!newCandidate && (normalized.includes('sign into new session') || normalized.includes('start new session'))) {
+                        newCandidate = btn;
+                        return;
+                    }
+
+                    if (!genericCandidate && (normalized.includes('sign in') || normalized.includes('continue') || normalized.includes('start session'))) {
+                        genericCandidate = btn;
+                    }
+                });
+
+                if (existingCandidate && attemptClick(existingCandidate, 'existing-session-button')) {
+                    return JSON.stringify(result);
+                }
+
+                if (genericCandidate && attemptClick(genericCandidate, 'session-button')) {
+                    return JSON.stringify(result);
+                }
+
+                if (newCandidate && attemptClick(newCandidate, 'new-session-button')) {
+                    return JSON.stringify(result);
+                }
+
+                var primaryButtons = Array.from(document.querySelectorAll('button, a'));
+                var primaryExisting = null;
+                var primaryGeneric = null;
+                var primaryNew = null;
+
+                primaryButtons.forEach(function(btn) {
+                    var text = normalize(btn.textContent);
+                    if (!text || text.includes('different user')) {
+                        return;
+                    }
+
+                    if (!primaryExisting && (text.includes('use this session') || text.includes('use existing session') || text.includes('continue with this session') || text.includes('existing session'))) {
+                        primaryExisting = btn;
+                        return;
+                    }
+
+                    if (!primaryNew && (text.includes('sign into new session') || text.includes('start new session'))) {
+                        primaryNew = btn;
+                        return;
+                    }
+
+                    if (!primaryGeneric && (text.includes('sign in') || text.includes('continue') || text.includes('start session'))) {
+                        primaryGeneric = btn;
+                    }
+                });
+
+                if (primaryExisting && attemptClick(primaryExisting, 'primary-existing-button')) {
+                    return JSON.stringify(result);
+                }
+
+                if (primaryGeneric && attemptClick(primaryGeneric, 'primary-generic-button')) {
+                    return JSON.stringify(result);
+                }
+
+                if (primaryNew && attemptClick(primaryNew, 'primary-new-button')) {
+                    return JSON.stringify(result);
+                }
+
+                return JSON.stringify(result);
+            })(arguments[0] || '');
+        """
+
+        try:
+            result = self.driver.execute_script(script, account_name or "")
+        except Exception as error:
+            if self.debug:
+                console.print(f"[dim]   JavaScript session click failed: {str(error)[:80]}[/dim]")
+            return False, None
+
+        if not result:
+            return False, None
+
+        if isinstance(result, str):
+            try:
+                payload = json.loads(result)
+            except json.JSONDecodeError:
+                return bool(result), result
+        elif isinstance(result, dict):
+            payload = result
+        else:
+            return bool(result), None
+
+        if payload.get("clicked"):
+            return True, payload.get("strategy")
+
+        return False, None
+
+    def _attempt_session_selection(self, account_name: Optional[str]) -> Tuple[bool, Optional[str]]:
+        """Try multiple strategies to pick an AWS session tile or button."""
+        clicked, strategy = self._click_session_with_playwright(account_name)
+        if clicked:
+            return clicked, strategy
+
+        return self._click_session_with_javascript(account_name)
+
+    def _describe_session_strategy(self, strategy: Optional[str]) -> str:
+        """Return a human readable label for a session selection strategy."""
+        if not strategy:
+            return "session option"
+
+        mapping = {
+            'account-link': 'account link',
+            'console-link': 'first console link',
+            'session-tile': 'session tile/card',
+            'existing-session-button': 'existing session button',
+            'session-button': 'session button',
+            'new-session-button': 'new session button',
+            'primary-existing-button': 'primary existing session button',
+            'primary-generic-button': 'primary button',
+            'primary-new-button': 'primary new session button',
+        }
+
+        if strategy.startswith('playwright:'):
+            selector = strategy.split(':', 1)[1]
+            return f"Playwright selector {selector}"
+
+        return mapping.get(strategy, strategy)
     
     # ==================== AWS DUO SSO AUTHENTICATION (NEW FEDERATION APPROACH!) ====================
     def authenticate_aws_duo_sso_with_federation(
@@ -402,122 +657,10 @@ class UniversalScreenshotEnhanced:
                         f"[yellow]⚠️  AWS session selector detected - auto-clicking session...[/yellow]"
                     )
 
-                    clicked = False
-                    
-                    # Strategy 1: Playwright (get CURRENT page, not stale!)
-                    if account_name:
-                        try:
-                            page = self._get_current_playwright_page()
-                            if page:
-                                console.print(f"[dim]   Strategy 1: Playwright with multiple selectors...[/dim]")
-                                
-                                # Try multiple ways to find the session link
-                                session_selectors = [
-                                    f'a:has-text("{account_name}")',  # Exact text match
-                                    f'a[href*="console"]:has-text("{account_name}")',  # Link to console with account name
-                                    f'awsui-card:has-text("{account_name}")',  # New OAuth card layout
-                                    f'[data-testid*="session"]:has-text("{account_name}")',
-                                    'a[href*="console"]',  # Any console link (first one)
-                                    'awsui-card',
-                                ]
-                                
-                                for selector in session_selectors:
-                                    try:
-                                        console.print(f"[dim]      Trying: {selector}[/dim]")
-                                        session_locator = page.locator(selector).first
-                                        if session_locator.is_visible(timeout=2000):
-                                            session_locator.click(force=True, timeout=3000)
-                                            console.print(f"[green]   ✅ Clicked session (Playwright: {selector})![/green]")
-                                            clicked = True
-                                            break
-                                    except Exception as sel_e:
-                                        console.print(f"[dim]      {selector[:30]} failed: {str(sel_e)[:30]}[/dim]")
-                                        continue
-                        except Exception as e:
-                            console.print(f"[yellow]   Playwright error: {str(e)[:60]}[/yellow]")
-                    
-                    # Strategy 2: JavaScript click (fallback)
-                    if not clicked:
-                        try:
-                            console.print(f"[dim]   Strategy 2: JavaScript with smart search...[/dim]")
-                            # Click the session link (prefer account name match)
-                            clicked_js = self.driver.execute_script("""
-                                var accountName = (arguments[0] || '').toLowerCase();
-                                console.log('Looking for session link, account:', accountName);
-
-                                function normalize(text) {
-                                    return (text || '').replace(/\s+/g, ' ').trim().toLowerCase();
-                                }
-
-                                // First try: Find link with account name
-                                if (accountName) {
-                                    var allLinks = document.querySelectorAll('a');
-                                    for (var i = 0; i < allLinks.length; i++) {
-                                        var link = allLinks[i];
-                                        var text = normalize(link.textContent);
-                                        if (text.includes(accountName) && link.href.includes('console')) {
-                                            console.log('Found account link:', link.textContent);
-                                            link.click();
-                                            return true;
-                                        }
-                                    }
-                                }
-
-                                // Fallback 1: Click first console link
-                                var consoleLinks = document.querySelectorAll('a[href*="console"]');
-                                console.log('Found', consoleLinks.length, 'console links');
-                                if (consoleLinks.length > 0) {
-                                    console.log('Clicking first console link');
-                                    consoleLinks[0].click();
-                                    return true;
-                                }
-
-                                // Fallback 2: Click session tiles/buttons (new oauth UI)
-                                var sessionButtons = document.querySelectorAll('[data-testid*="session"], [data-testid*="account-card"], button.awsui-card, a.awsui-card, awsui-card, awsui-card a, awsui-card button, awsui-table-row, awsui-table-row a, awsui-table-row button');
-                                console.log('Found', sessionButtons.length, 'session buttons/cards');
-                                if (sessionButtons.length > 0) {
-                                    console.log('Clicking first session button/card');
-                                    var button = sessionButtons[0];
-                                    if (button) {
-                                        if (typeof button.click === 'function') {
-                                            button.click();
-                                            return true;
-                                        }
-                                        var inner = button.querySelector('button, a');
-                                        if (inner && typeof inner.click === 'function') {
-                                            inner.click();
-                                            return true;
-                                        }
-                                        var event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
-                                        button.dispatchEvent(event);
-                                        return true;
-                                    }
-                                }
-
-                                // Fallback 3: Click first primary button with helpful text
-                                var primaryButtons = document.querySelectorAll('button, a');
-                                for (var j = 0; j < primaryButtons.length; j++) {
-                                    var btn = primaryButtons[j];
-                                    var btnText = normalize(btn.textContent);
-                                    if (btnText.includes('different user')) {
-                                        continue;
-                                    }
-                                    if (btnText.includes('sign in') || btnText.includes('use this session') || btnText.includes('continue')) {
-                                        console.log('Clicking fallback primary button:', btnText);
-                                        if (typeof btn.click === 'function') {
-                                            btn.click();
-                                            return true;
-                                        }
-                                    }
-                                }
-
-                                return false;
-                            """, account_name)
-                            if clicked_js:
-                                console.print(f"[green]   ✅ Clicked session (JavaScript)![/green]")
-                                clicked = True
-                        except Exception as e:
-                            console.print(f"[yellow]   JavaScript failed: {str(e)[:60]}[/yellow]")
+                    clicked, strategy = self._attempt_session_selection(account_name)
+                    if clicked:
+                        description = self._describe_session_strategy(strategy)
+                        console.print(f"[green]   ✅ Clicked session ({description})![/green]")
                     
                     if clicked:
                         # VERIFY: Wait for console to load (up to 15 seconds)
@@ -542,7 +685,10 @@ class UniversalScreenshotEnhanced:
                             return False
                     else:
                         console.print(f"[red]❌ Could not auto-click session[/red]")
-                        console.print(f"[yellow]⚠️  Please manually click on '{account_name}' session[/yellow]")
+                        if account_name:
+                            console.print(f"[yellow]⚠️  Please manually click on '{account_name}' session[/yellow]")
+                        else:
+                            console.print("[yellow]⚠️  Please manually choose the desired session[/yellow]")
                 
                 # Case 3: On SAML role selection page - DON'T NAVIGATE AWAY!
                 # Match with or without region prefix
