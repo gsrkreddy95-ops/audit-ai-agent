@@ -39,6 +39,70 @@ class BrowserSessionManager:
     _current_region = None
     _current_service = None
     _navigation_history = []
+    _last_authenticated_account = None
+    _last_authenticated_region = None
+
+    @classmethod
+    def _is_invalid_session_error(cls, error: Exception) -> bool:
+        """Return True if the exception looks like a stale/invalid browser session."""
+        message = str(error).lower()
+        return any(keyword in message for keyword in [
+            "invalid session id",
+            "target window already closed",
+            "chrome not reachable",
+            "webview not found",
+            "session deleted because",
+            "disconnected"
+        ])
+
+    @classmethod
+    def _teardown_browser_instance(cls):
+        """Close the current browser instance and reset cached state."""
+        if cls._browser_instance:
+            try:
+                cls._browser_instance.close()
+            except Exception:
+                pass
+        cls._browser_instance = None
+        cls._authenticated_accounts.clear()
+        cls._current_region = None
+        cls._current_service = None
+        cls._navigation_history.clear()
+
+    @classmethod
+    def _handle_invalid_session(cls, message: str, error: Optional[Exception] = None):
+        """Log session loss and reset the cached browser so a fresh one can be created."""
+        console.print(f"[yellow]⚠️  {message}[/yellow]")
+        if error and not cls._is_invalid_session_error(error):
+            console.print(f"[yellow]   Details: {error}[/yellow]")
+        cls._teardown_browser_instance()
+
+    @classmethod
+    def _ensure_browser_session_valid(cls) -> bool:
+        """Verify that the cached browser session is still alive."""
+        browser = cls._browser_instance
+        if not browser:
+            return False
+
+        driver = getattr(browser, 'driver', None)
+        if not driver:
+            cls._handle_invalid_session("Browser driver is missing; refreshing session...", error=None)
+            return False
+
+        session_id = getattr(driver, 'session_id', None)
+        if not session_id:
+            cls._handle_invalid_session("Browser session no longer has a valid session_id; refreshing...", error=None)
+            return False
+
+        try:
+            driver.execute_script("return document.readyState")
+            return True
+        except Exception as exc:
+            if cls._is_invalid_session_error(exc):
+                cls._handle_invalid_session("Persistent browser session expired; relaunching before continuing...", exc)
+            else:
+                cls._handle_invalid_session("Browser health check failed; recreating session...", exc)
+            return False
     
     def __init__(self):
         """Initialize manager (reuses existing browser if available)"""
@@ -57,22 +121,17 @@ class BrowserSessionManager:
         """
         if force_new and cls._browser_instance:
             console.print("[yellow]🔄 Closing existing browser to create fresh session...[/yellow]")
-            try:
-                cls._browser_instance.close()
-            except:
-                pass
-            cls._browser_instance = None
-            cls._authenticated_accounts.clear()
-            cls._current_region = None
-            cls._current_service = None
-            cls._navigation_history.clear()
-        
+            cls._teardown_browser_instance()
+
+        if cls._browser_instance and not cls._ensure_browser_session_valid():
+            console.print("[yellow]🔄 Re-launching browser session after health check failure...[/yellow]")
+
         if cls._browser_instance is None:
             from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced
-            
+
             console.print("[bold cyan]🚀 Launching NEW browser session (will be reused!)[/bold cyan]")
             browser = UniversalScreenshotEnhanced(headless=False, timeout=180, debug=True)
-            
+
             if browser.connect():
                 cls._browser_instance = browser
                 console.print("[green]✅ Browser session ready (will persist for multiple operations!)[/green]")
@@ -81,7 +140,7 @@ class BrowserSessionManager:
                 return None
         else:
             console.print("[dim]♻️  Reusing existing browser session (no new Duo auth needed!)[/dim]")
-        
+
         return cls._browser_instance
     
     @classmethod
@@ -105,6 +164,7 @@ class BrowserSessionManager:
             current_url = browser.driver.current_url if browser.driver else None
             if current_url and 'console.aws.amazon.com' in current_url:
                 cls._authenticated_accounts.add(account)
+                cls._last_authenticated_account = account
                 console.print(f"[green]✅ Already on AWS Console for {account}! (Session active)[/green]")
                 cls._refresh_current_region(reason="existing session")
                 cls._dismiss_cookie_banner()
@@ -115,6 +175,7 @@ class BrowserSessionManager:
         # Check if already authenticated to this account (from previous session)
         if account in cls._authenticated_accounts:
             console.print(f"[dim]✓ Already authenticated to {account}[/dim]")
+            cls._last_authenticated_account = account
             cls._refresh_current_region(reason="cached authentication")
             cls._dismiss_cookie_banner()
             return True
@@ -124,6 +185,7 @@ class BrowserSessionManager:
         # Perform Duo SSO authentication
         if browser.authenticate_aws_duo_sso(account_name=account):
             cls._authenticated_accounts.add(account)
+            cls._last_authenticated_account = account
             console.print(f"[green]✅ Authenticated to {account} successfully![/green]")
             cls._refresh_current_region(reason="post-authentication")
             cls._dismiss_cookie_banner()
@@ -154,7 +216,7 @@ class BrowserSessionManager:
         return navigator
     
     @classmethod
-    def navigate_to_service_via_search(cls, service_name: str, wait_time: int = 3) -> bool:
+    def navigate_to_service_via_search(cls, service_name: str, wait_time: int = 3, allow_retry: bool = True) -> bool:
         """
         Navigate to AWS service using the search bar (just like a human would!).
         
@@ -223,15 +285,23 @@ class BrowserSessionManager:
             else:
                 console.print(f"[yellow]⚠️  Search may not have worked, current URL: {current_url}[/yellow]")
                 # Try direct URL as fallback
-                return cls.navigate_to_service_direct(service_name)
+                return cls.navigate_to_service_direct(service_name, allow_retry=allow_retry)
         
         except Exception as e:
+            if cls._is_invalid_session_error(e):
+                cls._handle_invalid_session("Search navigation failed because the browser session ended unexpectedly.", e)
+                if allow_retry and cls._last_authenticated_account:
+                    console.print(f"[cyan]🔁 Restoring AWS session before retrying navigation to {service_name}...[/cyan]")
+                    if cls.authenticate_aws(account=cls._last_authenticated_account, region=cls._last_authenticated_region or cls._current_region or "us-east-1"):
+                        return cls.navigate_to_service_via_search(service_name, wait_time=wait_time, allow_retry=False)
+                return False
+
             console.print(f"[red]❌ Search navigation failed: {e}[/red]")
             # Fallback to direct URL
-            return cls.navigate_to_service_direct(service_name)
+            return cls.navigate_to_service_direct(service_name, allow_retry=allow_retry)
     
     @classmethod
-    def navigate_to_service_direct(cls, service_name: str) -> bool:
+    def navigate_to_service_direct(cls, service_name: str, allow_retry: bool = True) -> bool:
         """
         Navigate to service using direct URL (fallback method).
         
@@ -252,9 +322,21 @@ class BrowserSessionManager:
         url = f"https://{region}.console.aws.amazon.com/{service_lower}/home?region={region}"
         
         console.print(f"[cyan]🔗 Navigating to {service_name} via URL...[/cyan]")
-        browser.driver.get(url)
-        time.sleep(3)
-        
+        try:
+            browser.driver.get(url)
+            time.sleep(3)
+        except Exception as e:
+            if cls._is_invalid_session_error(e):
+                cls._handle_invalid_session("Direct navigation failed because the browser session ended.", e)
+                if allow_retry and cls._last_authenticated_account:
+                    console.print(f"[cyan]🔁 Recovering AWS session before retrying direct navigation to {service_name}...[/cyan]")
+                    if cls.authenticate_aws(account=cls._last_authenticated_account, region=cls._last_authenticated_region or cls._current_region or "us-east-1"):
+                        return cls.navigate_to_service_direct(service_name, allow_retry=False)
+                return False
+
+            console.print(f"[red]❌ Direct navigation to {service_name} failed: {e}[/red]")
+            return False
+
         cls._current_service = service_name
         cls._navigation_history.append(service_name)
         return True
@@ -265,10 +347,23 @@ class BrowserSessionManager:
         browser = cls.get_browser()
         if not browser or not browser.driver:
             return False
-        
+
         console.print("[cyan]⬅️  Going back...[/cyan]")
-        browser.driver.back()
-        time.sleep(2)
+        try:
+            browser.driver.back()
+            time.sleep(2)
+        except Exception as e:
+            if cls._is_invalid_session_error(e):
+                cls._handle_invalid_session("Unable to go back because the browser session ended.", e)
+                if cls._last_authenticated_account:
+                    console.print("[cyan]🔁 Session restore required; re-authenticating before continuing back navigation...[/cyan]")
+                    if cls.authenticate_aws(account=cls._last_authenticated_account, region=cls._last_authenticated_region or cls._current_region or "us-east-1"):
+                        return True
+                return False
+
+            console.print(f"[red]❌ Failed to navigate back: {e}[/red]")
+            return False
+
         return True
     
     @classmethod
@@ -277,14 +372,27 @@ class BrowserSessionManager:
         browser = cls.get_browser()
         if not browser or not browser.driver:
             return False
-        
+
         console.print("[cyan]➡️  Going forward...[/cyan]")
-        browser.driver.forward()
-        time.sleep(2)
+        try:
+            browser.driver.forward()
+            time.sleep(2)
+        except Exception as e:
+            if cls._is_invalid_session_error(e):
+                cls._handle_invalid_session("Unable to go forward because the browser session ended.", e)
+                if cls._last_authenticated_account:
+                    console.print("[cyan]🔁 Session restore required; re-authenticating before continuing forward navigation...[/cyan]")
+                    if cls.authenticate_aws(account=cls._last_authenticated_account, region=cls._last_authenticated_region or cls._current_region or "us-east-1"):
+                        return True
+                return False
+
+            console.print(f"[red]❌ Failed to navigate forward: {e}[/red]")
+            return False
+
         return True
     
     @classmethod
-    def change_region(cls, new_region: str) -> bool:
+    def change_region(cls, new_region: str, allow_retry: bool = True) -> bool:
         """
         Change AWS region using the region selector.
         
@@ -331,7 +439,7 @@ class BrowserSessionManager:
                 
                 if not clicked_button:
                     console.print("[yellow]⚠️  Could not click region button, trying Selenium fallback...[/yellow]")
-                    return cls._change_region_selenium(browser, new_region)
+                    return cls._change_region_selenium(browser, new_region, allow_retry=allow_retry)
                 
                 # Wait for dropdown to open
                 time.sleep(1)
@@ -357,7 +465,7 @@ class BrowserSessionManager:
                 
                 if not region_clicked:
                     console.print("[yellow]⚠️  Could not click region option, trying Selenium fallback...[/yellow]")
-                    return cls._change_region_selenium(browser, new_region)
+                    return cls._change_region_selenium(browser, new_region, allow_retry=allow_retry)
                 
                 # Wait for region change to take effect and verify
                 for _ in range(10):
@@ -365,6 +473,7 @@ class BrowserSessionManager:
                     detected = cls._detect_current_region(browser)
                     if detected == new_region:
                         cls._current_region = detected
+                        cls._last_authenticated_region = detected
                         cls._dismiss_cookie_banner(browser)
                         console.print(f"[bold green]✅ Successfully changed to region: {new_region}[/bold green]")
                         return True
@@ -373,18 +482,19 @@ class BrowserSessionManager:
                 console.print(f"[yellow]⚠️  Region change verification failed (detected: {detected or 'unknown'})[/yellow]")
                 if detected:
                     cls._current_region = detected
+                    cls._last_authenticated_region = detected
                 return False
             
             except Exception as e:
                 console.print(f"[yellow]⚠️  Playwright region change failed: {e}[/yellow]")
                 console.print("[yellow]   Trying Selenium fallback...[/yellow]")
-                return cls._change_region_selenium(browser, new_region)
-        
+                return cls._change_region_selenium(browser, new_region, allow_retry=allow_retry)
+
         # Strategy 2: Selenium fallback
-        return cls._change_region_selenium(browser, new_region)
-    
+        return cls._change_region_selenium(browser, new_region, allow_retry=allow_retry)
+
     @classmethod
-    def _change_region_selenium(cls, browser, new_region: str) -> bool:
+    def _change_region_selenium(cls, browser, new_region: str, allow_retry: bool = True) -> bool:
         """Selenium fallback for region changing"""
         try:
             if not browser.driver:
@@ -455,14 +565,24 @@ class BrowserSessionManager:
                     cls._current_region = detected
                     cls._dismiss_cookie_banner(browser)
                     console.print(f"[green]✅ Region changed to {new_region} (Selenium)[/green]")
+                    cls._last_authenticated_region = new_region
                     return True
 
             console.print(f"[yellow]⚠️  Unable to confirm region change to {new_region} (detected: {detected or 'unknown'})[/yellow]")
             if detected:
                 cls._current_region = detected
+                cls._last_authenticated_region = detected
             return False
 
         except Exception as e:
+            if cls._is_invalid_session_error(e):
+                cls._handle_invalid_session("Selenium region change failed because the browser session was lost.", e)
+                if allow_retry and cls._last_authenticated_account:
+                    console.print(f"[cyan]🔁 Attempting automatic AWS re-authentication for {cls._last_authenticated_account}...[/cyan]")
+                    if cls.authenticate_aws(account=cls._last_authenticated_account, region=new_region):
+                        return cls.change_region(new_region, allow_retry=False)
+                return False
+
             console.print(f"[red]❌ Selenium region change failed: {e}[/red]")
             import traceback
             traceback.print_exc()
@@ -574,6 +694,7 @@ class BrowserSessionManager:
                 note = f" ({reason})" if reason else ""
                 console.print(f"[cyan]🧭 Detected active AWS region: {detected}{note}[/cyan]")
             cls._current_region = detected
+            cls._last_authenticated_region = detected
         elif reason:
             console.print(f"[yellow]⚠️  Unable to detect AWS region{f' ({reason})' if reason else ''}[/yellow]")
 
@@ -659,15 +780,7 @@ class BrowserSessionManager:
         """
         if cls._browser_instance:
             console.print("[yellow]🔒 Closing browser session...[/yellow]")
-            try:
-                cls._browser_instance.close()
-            except:
-                pass
-            cls._browser_instance = None
-            cls._authenticated_accounts.clear()
-            cls._current_region = None
-            cls._current_service = None
-            cls._navigation_history.clear()
+            cls._teardown_browser_instance()
             console.print("[green]✅ Browser session closed[/green]")
     
     @classmethod
@@ -677,6 +790,8 @@ class BrowserSessionManager:
             "browser_active": cls._browser_instance is not None,
             "authenticated_accounts": list(cls._authenticated_accounts),
             "current_region": cls._current_region,
+            "last_authenticated_account": cls._last_authenticated_account,
+            "last_authenticated_region": cls._last_authenticated_region,
             "current_service": cls._current_service,
             "navigation_history": cls._navigation_history
         }
