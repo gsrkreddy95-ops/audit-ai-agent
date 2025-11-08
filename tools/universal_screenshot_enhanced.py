@@ -458,7 +458,7 @@ class UniversalScreenshotEnhanced:
                                         if (text.includes(accountName) && link.href.includes('console')) {
                                             console.log('Found account link:', link.textContent);
                                             link.click();
-                                            return true;
+                                            return 'account-link';
                                         }
                                     }
                                 }
@@ -469,7 +469,7 @@ class UniversalScreenshotEnhanced:
                                 if (consoleLinks.length > 0) {
                                     console.log('Clicking first console link');
                                     consoleLinks[0].click();
-                                    return true;
+                                    return 'console-link';
                                 }
 
                                 // Fallback 2: Click session tiles/buttons (new oauth UI)
@@ -481,41 +481,143 @@ class UniversalScreenshotEnhanced:
                                     if (button) {
                                         if (typeof button.click === 'function') {
                                             button.click();
-                                            return true;
+                                            return 'session-tile';
                                         }
                                         var inner = button.querySelector('button, a');
                                         if (inner && typeof inner.click === 'function') {
                                             inner.click();
-                                            return true;
+                                            return 'session-tile';
                                         }
                                         var event = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
                                         button.dispatchEvent(event);
-                                        return true;
+                                        return 'session-tile';
                                     }
                                 }
 
-                                // Fallback 3: Click first primary button with helpful text
+                                // Fallback 3: Handle awsui-button shadow DOM ("Sign into new session" layout)
+                                var awsuiButtons = document.querySelectorAll('awsui-button');
+                                console.log('Found', awsuiButtons.length, 'awsui-button elements');
+                                var newSessionCandidate = null;
+                                var genericSessionCandidate = null;
+                                for (var k = 0; k < awsuiButtons.length; k++) {
+                                    var awsui = awsuiButtons[k];
+                                    try {
+                                        var shadow = awsui.shadowRoot;
+                                        var shadowButton = shadow ? shadow.querySelector('button') : null;
+                                        if (!shadowButton) {
+                                            shadowButton = awsui.querySelector('button');
+                                        }
+                                        if (!shadowButton) {
+                                            continue;
+                                        }
+                                        var shadowText = normalize(shadowButton.textContent || awsui.textContent || '');
+                                        if (shadowText.includes('use this session') || shadowText.includes('use existing session') || shadowText.includes('continue with this session') || shadowText.includes('existing session')) {
+                                            console.log('Clicking awsui-button existing session via shadow DOM:', shadowText);
+                                            shadowButton.click();
+                                            return 'existing-session-button';
+                                        }
+                                        if (shadowText.includes('sign into new session') || shadowText.includes('start new session')) {
+                                            if (!newSessionCandidate) {
+                                                newSessionCandidate = shadowButton;
+                                                console.log('Captured new session awsui-button candidate:', shadowText);
+                                            }
+                                            continue;
+                                        }
+                                        if (!genericSessionCandidate && (shadowText.includes('sign in') || shadowText.includes('continue'))) {
+                                            genericSessionCandidate = shadowButton;
+                                            console.log('Captured generic awsui-button candidate:', shadowText);
+                                        }
+                                    } catch (err) {
+                                        console.log('awsui-button handling failed:', err);
+                                    }
+                                }
+
+                                if (genericSessionCandidate) {
+                                    console.log('Clicking awsui-button generic session candidate');
+                                    genericSessionCandidate.click();
+                                    return 'session-button';
+                                }
+                                if (newSessionCandidate) {
+                                    console.log('Clicking awsui-button new session candidate');
+                                    newSessionCandidate.click();
+                                    return 'new-session-button';
+                                }
+
+                                // Fallback 4: Click first primary button with helpful text (prioritize existing session)
                                 var primaryButtons = document.querySelectorAll('button, a');
+                                var existingPrimary = null;
+                                var genericPrimary = null;
+                                var newPrimary = null;
                                 for (var j = 0; j < primaryButtons.length; j++) {
                                     var btn = primaryButtons[j];
                                     var btnText = normalize(btn.textContent);
                                     if (btnText.includes('different user')) {
                                         continue;
                                     }
-                                    if (btnText.includes('sign in') || btnText.includes('use this session') || btnText.includes('continue')) {
-                                        console.log('Clicking fallback primary button:', btnText);
-                                        if (typeof btn.click === 'function') {
-                                            btn.click();
-                                            return true;
+                                    if (btnText.includes('use this session') || btnText.includes('use existing session') || btnText.includes('continue with this session') || btnText.includes('existing session')) {
+                                        existingPrimary = btn;
+                                        break;
+                                    }
+                                    if (btnText.includes('sign into new session') || btnText.includes('start new session')) {
+                                        if (!newPrimary) {
+                                            newPrimary = btn;
                                         }
+                                        continue;
+                                    }
+                                    if (!genericPrimary && (btnText.includes('sign in') || btnText.includes('continue') || btnText.includes('start session'))) {
+                                        genericPrimary = btn;
+                                    }
+                                }
+
+                                function clickAndReturn(button, label) {
+                                    if (button && typeof button.click === 'function') {
+                                        console.log('Clicking fallback primary button:', label);
+                                        button.click();
+                                        return label;
+                                    }
+                                    return false;
+                                }
+
+                                var clickedLabel = null;
+                                if (existingPrimary) {
+                                    clickedLabel = clickAndReturn(existingPrimary, 'primary-existing-button');
+                                    if (clickedLabel) {
+                                        return clickedLabel;
+                                    }
+                                }
+                                if (genericPrimary) {
+                                    clickedLabel = clickAndReturn(genericPrimary, 'primary-generic-button');
+                                    if (clickedLabel) {
+                                        return clickedLabel;
+                                    }
+                                }
+                                if (newPrimary) {
+                                    clickedLabel = clickAndReturn(newPrimary, 'primary-new-button');
+                                    if (clickedLabel) {
+                                        return clickedLabel;
                                     }
                                 }
 
                                 return false;
                             """, account_name)
                             if clicked_js:
-                                console.print(f"[green]   ✅ Clicked session (JavaScript)![/green]")
                                 clicked = True
+                                label_map = {
+                                    'account-link': 'account link',
+                                    'console-link': 'first console link',
+                                    'session-tile': 'session tile/card',
+                                    'existing-session-button': 'existing session button',
+                                    'session-button': 'session button',
+                                    'new-session-button': 'new session button',
+                                    'primary-existing-button': 'primary existing session button',
+                                    'primary-generic-button': 'primary button',
+                                    'primary-new-button': 'primary new session button',
+                                }
+                                if isinstance(clicked_js, str):
+                                    label = label_map.get(clicked_js, clicked_js)
+                                    console.print(f"[green]   ✅ Clicked session ({label})![/green]")
+                                else:
+                                    console.print(f"[green]   ✅ Clicked session (JavaScript)![/green]")
                         except Exception as e:
                             console.print(f"[yellow]   JavaScript failed: {str(e)[:60]}[/yellow]")
                     
