@@ -38,6 +38,15 @@ try:
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
     print("[DEBUG] Playwright not available (optional)")
+
+# AWS Federation authentication (bypasses SAML button!)
+try:
+    from tools.aws_federation_auth import AWSFederationAuth
+    FEDERATION_AVAILABLE = True
+    print("[DEBUG] AWS Federation authentication available")
+except ImportError:
+    FEDERATION_AVAILABLE = False
+    print("[DEBUG] AWS Federation not available (optional)")
     # Provide dummy classes for type hints
     class By:
         XPATH = "xpath"
@@ -103,8 +112,14 @@ class UniversalScreenshotEnhanced:
         self.browser_pw = None
         self.page = None
         
+        # AWS Federation attributes (bypasses SAML sign-in button!)
+        self.federation_auth = None
+        self.use_federation = FEDERATION_AVAILABLE  # Use Federation if available
+        
         if self.debug:
             console.print(f"[dim]🛠️ UniversalScreenshotEnhanced initialized (debug mode, timeout={timeout})[/dim]")
+            if self.use_federation:
+                console.print(f"[dim]🎫 AWS Federation authentication enabled (bypasses SAML button!)[/dim]")
         
     def connect(self, browser_type: str = 'chrome') -> bool:
         """Launch browser"""
@@ -154,6 +169,12 @@ class UniversalScreenshotEnhanced:
             
             # Connect Playwright for advanced element interaction
             self._connect_playwright_via_cdp()
+            
+            # Initialize AWS Federation authentication (if available)
+            if FEDERATION_AVAILABLE and self.use_federation:
+                self.federation_auth = AWSFederationAuth(self.driver, debug=self.debug)
+                if self.debug:
+                    console.print(f"[dim]🎫 AWS Federation authentication initialized[/dim]")
             
             return True
             
@@ -222,7 +243,105 @@ class UniversalScreenshotEnhanced:
         
         return None
     
-    # ==================== AWS DUO SSO AUTHENTICATION ====================
+    # ==================== AWS DUO SSO AUTHENTICATION (NEW FEDERATION APPROACH!) ====================
+    def authenticate_aws_duo_sso_with_federation(
+        self,
+        destination_url: str,
+        duo_url: str = None,
+        wait_timeout: int = 300,
+        account_name: str = None
+    ) -> bool:
+        """
+        NEW APPROACH: Authenticate to AWS using Federation API (bypasses SAML button!).
+        
+        This is the industry-standard approach that:
+        1. Completes Duo authentication
+        2. Extracts SAML assertion
+        3. Uses AWS Federation API to get direct console URL
+        4. Navigates directly to destination (no button clicking!)
+        
+        Args:
+            destination_url: Target AWS console page (e.g., RDS clusters page)
+            duo_url: Duo SSO URL (default: CTR Duo)
+            wait_timeout: Max seconds to wait for Duo auth
+            account_name: AWS account name (for logging)
+        
+        Returns:
+            True if successfully authenticated and navigated to destination
+        """
+        try:
+            # Check if we can reuse cached Federation token
+            if self.federation_auth and self.federation_auth.is_token_valid():
+                console.print("[green]♻️  Reusing cached Federation token[/green]")
+                console_url = self.federation_auth.get_cached_console_url(destination_url)
+                if console_url:
+                    console.print(f"[cyan]🌐 Navigating to: {destination_url}[/cyan]")
+                    self.driver.get(console_url)
+                    time.sleep(3)
+                    
+                    # Verify we reached the destination
+                    current_url = self.driver.current_url
+                    if 'console.aws.amazon.com' in current_url:
+                        console.print(f"[green]✅ Reached AWS Console via Federation![/green]")
+                        return True
+            
+            # Need fresh authentication
+            console.print(f"[bold cyan]🎫 AWS Federation Authentication (NO SAML BUTTON!)[/bold cyan]")
+            
+            # Step 1: Navigate to Duo SSO
+            if not duo_url:
+                duo_url = "https://sso-dbbfec7f.sso.duosecurity.com/saml2/sp/DIRGUUDMLYKC10GOCNOR/sso"
+            
+            console.print(f"[cyan]🔗 Navigating to Duo SSO...[/cyan]")
+            if account_name:
+                console.print(f"[dim]Target account: {account_name}[/dim]")
+            
+            self.driver.get(duo_url)
+            time.sleep(3)
+            
+            # Step 2: Wait for user to complete Duo authentication
+            console.print(f"[yellow]⏳ Complete Duo authentication (up to {wait_timeout//60} min)...[/yellow]")
+            console.print("[yellow]   1. Approve Duo push on your phone[/yellow]")
+            console.print("[green]   2. ⭐ CHECK 'Trust this browser' ⭐[/green]")
+            console.print("[yellow]   3. Federation will auto-extract credentials![/yellow]")
+            
+            # Step 3: Use Federation to get direct console URL
+            if not self.federation_auth:
+                console.print("[red]❌ Federation auth not initialized[/red]")
+                return False
+            
+            console_url = self.federation_auth.authenticate_and_get_console_url(
+                destination=destination_url,
+                account_name=account_name,
+                wait_timeout=wait_timeout
+            )
+            
+            if not console_url:
+                console.print("[red]❌ Federation authentication failed[/red]")
+                return False
+            
+            # Step 4: Navigate directly to destination (bypasses SAML page!)
+            console.print(f"[bold green]🚀 Federation successful! Navigating directly to console...[/bold green]")
+            console.print(f"[cyan]🌐 Destination: {destination_url}[/cyan]")
+            
+            self.driver.get(console_url)
+            time.sleep(3)
+            
+            # Verify we reached AWS Console
+            current_url = self.driver.current_url
+            if 'console.aws.amazon.com' in current_url:
+                console.print(f"[green]✅ SUCCESS! Reached AWS Console via Federation![/green]")
+                console.print(f"[green]✅ No SAML button clicking needed![/green]")
+                return True
+            else:
+                console.print(f"[yellow]⚠️  Navigation incomplete, current URL: {current_url}[/yellow]")
+                return False
+                
+        except Exception as e:
+            console.print(f"[red]❌ Federation authentication failed: {e}[/red]")
+            return False
+    
+    # ==================== AWS DUO SSO AUTHENTICATION (OLD BUTTON-CLICKING APPROACH) ====================
     def authenticate_aws_duo_sso(self, duo_url: str = None, wait_timeout: int = 300, account_name: str = None) -> bool:
         """Navigate to Duo SSO and wait for authentication to complete.
         
