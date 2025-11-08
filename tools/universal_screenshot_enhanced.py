@@ -387,10 +387,16 @@ class UniversalScreenshotEnhanced:
                     console.print(f"[green]✅ Already on AWS Console! (Session active)[/green]")
                     return True
                 
-                # Case 2: On session selector - Click the session and VERIFY!
-                # Match with or without region prefix (us-east-1.signin.aws.amazon.com or signin.aws.amazon.com)
-                if current_url and '/sessions/selector' in current_url and 'aws.amazon.com' in current_url:
-                    console.print(f"[yellow]⚠️  AWS session selector detected - auto-clicking session...[/yellow]")
+                # Case 2: On session selector / Choose session page - Click the session and VERIFY!
+                # Handles both classic selector URL and newer oauth-based "Choose your AWS session" screen
+                if current_url and 'aws.amazon.com' in current_url and (
+                    '/sessions/selector' in current_url
+                    or '/console/oauth' in current_url
+                    or 'client_id=arn:aws:signin:::console' in current_url
+                ):
+                    console.print(
+                        f"[yellow]⚠️  AWS session selector detected - auto-clicking session...[/yellow]"
+                    )
                     
                     clicked = False
                     
@@ -446,7 +452,7 @@ class UniversalScreenshotEnhanced:
                                     }
                                 }
                                 
-                                // Fallback: Click first console link
+                                // Fallback 1: Click first console link
                                 var consoleLinks = document.querySelectorAll('a[href*="console"]');
                                 console.log('Found', consoleLinks.length, 'console links');
                                 if (consoleLinks.length > 0) {
@@ -454,7 +460,33 @@ class UniversalScreenshotEnhanced:
                                     consoleLinks[0].click();
                                     return true;
                                 }
-                                
+
+                                // Fallback 2: Click session tiles/buttons (new oauth UI)
+                                var sessionButtons = document.querySelectorAll('[data-testid*="session"], button.awsui-card, a.awsui-card, awsui-card a');
+                                console.log('Found', sessionButtons.length, 'session buttons/cards');
+                                if (sessionButtons.length > 0) {
+                                    console.log('Clicking first session button/card');
+                                    var button = sessionButtons[0];
+                                    if (button && typeof button.click === 'function') {
+                                        button.click();
+                                        return true;
+                                    }
+                                }
+
+                                // Fallback 3: Click first primary button with helpful text
+                                var primaryButtons = document.querySelectorAll('button, a');
+                                for (var j = 0; j < primaryButtons.length; j++) {
+                                    var btn = primaryButtons[j];
+                                    var btnText = (btn.textContent || '').toLowerCase();
+                                    if (btnText.includes('sign in') || btnText.includes('use this session') || btnText.includes('continue')) {
+                                        console.log('Clicking fallback primary button:', btnText);
+                                        if (typeof btn.click === 'function') {
+                                            btn.click();
+                                            return true;
+                                        }
+                                    }
+                                }
+
                                 return false;
                             """, account_name)
                             if clicked_js:
