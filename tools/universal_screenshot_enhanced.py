@@ -494,7 +494,32 @@ class UniversalScreenshotEnhanced:
                                     }
                                 }
 
-                                // Fallback 3: Click first primary button with helpful text
+                                // Fallback 3: Handle awsui-button shadow DOM ("Sign into new session" layout)
+                                var awsuiButtons = document.querySelectorAll('awsui-button');
+                                console.log('Found', awsuiButtons.length, 'awsui-button elements');
+                                for (var k = 0; k < awsuiButtons.length; k++) {
+                                    var awsui = awsuiButtons[k];
+                                    try {
+                                        var shadow = awsui.shadowRoot;
+                                        var shadowButton = shadow ? shadow.querySelector('button') : null;
+                                        if (!shadowButton) {
+                                            shadowButton = awsui.querySelector('button');
+                                        }
+                                        if (!shadowButton) {
+                                            continue;
+                                        }
+                                        var shadowText = normalize(shadowButton.textContent || awsui.textContent || '');
+                                        if (shadowText.includes('sign into new session') || shadowText.includes('use this session') || shadowText.includes('sign in')) {
+                                            console.log('Clicking awsui-button via shadow DOM:', shadowText);
+                                            shadowButton.click();
+                                            return true;
+                                        }
+                                    } catch (err) {
+                                        console.log('awsui-button handling failed:', err);
+                                    }
+                                }
+
+                                // Fallback 4: Click first primary button with helpful text
                                 var primaryButtons = document.querySelectorAll('button, a');
                                 for (var j = 0; j < primaryButtons.length; j++) {
                                     var btn = primaryButtons[j];
