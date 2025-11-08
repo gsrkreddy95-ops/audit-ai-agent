@@ -7,6 +7,7 @@ Works across AWS, Azure, Kubernetes, Datadog, Splunk, ServiceNow, etc.
 import os
 import time
 import re
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List, Callable, TYPE_CHECKING
@@ -1990,8 +1991,9 @@ class UniversalScreenshotEnhanced:
     
     # ==================== SCREENSHOT CAPTURE ====================
     
-    def capture_screenshot(self, name: str, wait_time: int = 2, 
-                         scroll_before: bool = True, ensure_watermark: bool = True) -> Optional[str]:
+    def capture_screenshot(self, name: str, wait_time: int = 2,
+                         scroll_before: bool = True, ensure_watermark: bool = True,
+                         full_page: bool = True) -> Optional[str]:
         """
         Capture screenshot with optional scrolling
         
@@ -1999,6 +2001,8 @@ class UniversalScreenshotEnhanced:
             name: Screenshot name/identifier
             wait_time: Seconds to wait before capturing
             scroll_before: Whether to scroll to load dynamic content
+            ensure_watermark: Whether to stamp the capture with the evidence label & timestamp
+            full_page: Attempt Chrome DevTools full-page capture (falls back to viewport)
         
         Returns:
             Path to saved screenshot or None if failed
@@ -2018,7 +2022,54 @@ class UniversalScreenshotEnhanced:
                 time.sleep(0.5)
             
             console.print("[cyan]📸 Capturing screenshot...[/cyan]")
-            screenshot_bytes = self.driver.get_screenshot_as_png()
+
+            screenshot_bytes = None
+
+            if full_page and hasattr(self.driver, "execute_cdp_cmd"):
+                try:
+                    total_width = self.driver.execute_script(
+                        "return Math.max(document.body.scrollWidth, document.documentElement.scrollWidth, window.innerWidth);"
+                    )
+                    total_height = self.driver.execute_script(
+                        "return Math.max(document.body.scrollHeight, document.documentElement.scrollHeight, window.innerHeight);"
+                    )
+
+                    # Chrome fails above ~16k px - clamp to safe limits
+                    max_dimension = 16384
+                    total_width = max(1, min(int(total_width or 1920), max_dimension))
+                    total_height = max(1, min(int(total_height or 1080), max_dimension))
+
+                    self.driver.execute_cdp_cmd("Page.enable", {})
+                    self.driver.execute_cdp_cmd("Emulation.setDeviceMetricsOverride", {
+                        "mobile": False,
+                        "width": total_width,
+                        "height": total_height,
+                        "deviceScaleFactor": 1,
+                        "screenOrientation": {"type": "landscapePrimary", "angle": 0}
+                    })
+
+                    capture_result = self.driver.execute_cdp_cmd("Page.captureScreenshot", {
+                        "format": "png",
+                        "fromSurface": True,
+                        "captureBeyondViewport": True
+                    })
+                    if capture_result and capture_result.get("data"):
+                        screenshot_bytes = base64.b64decode(capture_result["data"])
+                        if self.debug:
+                            console.print(
+                                f"[dim]   📏 Full-page capture via CDP ({total_width}x{total_height})[/dim]"
+                            )
+                except Exception as full_page_error:
+                    screenshot_bytes = None
+                    console.print(f"[yellow]⚠️  Full-page capture fallback: {full_page_error}")
+                finally:
+                    try:
+                        self.driver.execute_cdp_cmd("Emulation.clearDeviceMetricsOverride", {})
+                    except Exception:
+                        pass
+
+            if screenshot_bytes is None:
+                screenshot_bytes = self.driver.get_screenshot_as_png()
             img = Image.open(io.BytesIO(screenshot_bytes))
             if ensure_watermark:
                 img = self._add_timestamp(img, name)
@@ -2131,7 +2182,9 @@ class UniversalScreenshotEnhanced:
                 screenshot_path = self.capture_screenshot(
                     f"{name}_scroll{screenshot_num}",
                     wait_time=1,
-                    scroll_before=False
+                    scroll_before=False,
+                    ensure_watermark=True,
+                    full_page=False
                 )
                 if screenshot_path:
                     screenshots.append(screenshot_path)

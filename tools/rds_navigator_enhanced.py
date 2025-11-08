@@ -845,7 +845,7 @@ class RDSNavigatorEnhanced:
             console.print(f"[cyan]   Searching for cluster: '{cluster_name}'[/cyan]")
             if tab:
                 console.print(f"[cyan]   Tab: {tab}[/cyan]")
-            
+
             # STEP 0: Use AWS SDK to find full cluster name (INTELLIGENT!)
             full_cluster_name = cluster_name
             if self.aws_helper:
@@ -859,40 +859,118 @@ class RDSNavigatorEnhanced:
                     console.print(f"[yellow]⚠️  AWS SDK couldn't find cluster, will try browser search...[/yellow]")
             else:
                 console.print(f"[dim]AWS SDK not available, using browser search only...[/dim]")
-            
-            # STEP 1: Navigate to databases list
-            console.print("[cyan]Step 1: Navigating to RDS databases list...[/cyan]")
-            if not self.navigate_to_clusters_list():
-                console.print("[red]❌ Failed to navigate to databases list[/red]")
-                return None
-            
-            # Wait for list to load
-            time.sleep(3)
-            
-            # STEP 2: Find and click cluster (now using FULL name if SDK found it!)
-            console.print(f"[cyan]Step 2: Finding and clicking cluster '{full_cluster_name}'...[/cyan]")
-            if not self.click_cluster(full_cluster_name, partial_match=True):
-                console.print(f"[red]❌ Could not find or click cluster '{full_cluster_name}'[/red]")
-                return None
-            
-            # Wait for cluster details to load
-            time.sleep(3)
-            
-            # Step 3: Click tab if specified
-            if tab:
-                console.print(f"[cyan]Step 3: Clicking tab '{tab}' (HUMAN-LIKE!)[/cyan]")
-                from tools.aws_tab_navigator import AWSTabNavigator
-                
-                tab_navigator = AWSTabNavigator(self.tool.driver)
-                if tab_navigator.find_and_click_tab(tab):
-                    console.print(f"[green]✅ Successfully clicked tab '{tab}'[/green]")
-                    time.sleep(2)  # Wait for tab content to load
+
+            # STEP 0.5: Reuse existing cluster view when already on the desired page
+            reuse_existing_view = False
+            normalized_target = (full_cluster_name or cluster_name or "").lower()
+
+            if self.tool and self.tool.driver:
+                try:
+                    current_url = (self.tool.driver.current_url or "").lower()
+                    if "console.aws.amazon.com/rds/home" in current_url and "#database:id=" in current_url:
+                        if normalized_target and normalized_target in current_url:
+                            reuse_existing_view = True
+                        else:
+                            try:
+                                page_source_lower = (self.tool.driver.page_source or "").lower()
+                            except Exception:
+                                page_source_lower = ""
+                            if normalized_target and normalized_target in page_source_lower:
+                                reuse_existing_view = True
+                            elif not normalized_target and cluster_name and cluster_name.lower() in page_source_lower:
+                                reuse_existing_view = True
+
+                    if not reuse_existing_view and self.current_cluster:
+                        current_known = (self.current_cluster or "").lower()
+                        if normalized_target and (normalized_target in current_known or current_known in normalized_target):
+                            reuse_existing_view = True
+                except Exception as reuse_error:
+                    console.print(f"[yellow]⚠️  Reuse detection warning: {reuse_error}")
+
+            if reuse_existing_view:
+                console.print("[bold green]🔁 Reusing active RDS cluster view within existing browser session[/bold green]")
+                if full_cluster_name:
+                    self.current_cluster = full_cluster_name
+                elif self.current_cluster:
+                    full_cluster_name = self.current_cluster
                 else:
-                    console.print(f"[yellow]⚠️  Tab '{tab}' not found, capturing current view[/yellow]")
-            
+                    self.current_cluster = cluster_name
+
+                if not full_cluster_name or not full_cluster_name.strip():
+                    try:
+                        header_text = self.tool.driver.execute_script("""
+                            return (function(){
+                                const header = document.querySelector("[data-testid='database-header']") ||
+                                                document.querySelector('h1, h2');
+                                if (!header) { return ''; }
+                                return (header.innerText || header.textContent || '').split('\n')[0].trim();
+                            })();
+                        """) or ""
+                        if header_text:
+                            full_cluster_name = header_text
+                            self.current_cluster = header_text
+                    except Exception:
+                        pass
+
+                # Make sure we're back at the top before switching tabs or capturing
+                try:
+                    self.tool.driver.execute_script("window.scrollTo(0, 0);")
+                except Exception:
+                    pass
+
+                if tab:
+                    desired_tab_lower = tab.lower()
+                    if self.current_tab and self.current_tab.lower() == desired_tab_lower:
+                        console.print(f"[green]✅ Already on tab '{tab}'[/green]")
+                        time.sleep(1)
+                    else:
+                        from tools.aws_tab_navigator import AWSTabNavigator
+
+                        tab_navigator = AWSTabNavigator(self.tool.driver)
+                        if tab_navigator.find_and_click_tab(tab):
+                            self.current_tab = tab
+                            console.print(f"[green]✅ Successfully clicked tab '{tab}'[/green]")
+                            time.sleep(2)
+                        else:
+                            console.print(f"[yellow]⚠️  Tab '{tab}' not found, capturing current view[/yellow]")
+                else:
+                    console.print("[dim]No tab requested; capturing the current view as-is.[/dim]")
+            else:
+                # STEP 1: Navigate to databases list
+                console.print("[cyan]Step 1: Navigating to RDS databases list...[/cyan]")
+                if not self.navigate_to_clusters_list():
+                    console.print("[red]❌ Failed to navigate to databases list[/red]")
+                    return None
+
+                # Wait for list to load
+                time.sleep(3)
+
+                # STEP 2: Find and click cluster (now using FULL name if SDK found it!)
+                console.print(f"[cyan]Step 2: Finding and clicking cluster '{full_cluster_name}'...[/cyan]")
+                if not self.click_cluster(full_cluster_name, partial_match=True):
+                    console.print(f"[red]❌ Could not find or click cluster '{full_cluster_name}'[/red]")
+                    return None
+
+                # Wait for cluster details to load
+                time.sleep(3)
+
+                # Step 3: Click tab if specified
+                if tab:
+                    console.print(f"[cyan]Step 3: Clicking tab '{tab}' (HUMAN-LIKE!)[/cyan]")
+                    from tools.aws_tab_navigator import AWSTabNavigator
+
+                    tab_navigator = AWSTabNavigator(self.tool.driver)
+                    if tab_navigator.find_and_click_tab(tab):
+                        self.current_tab = tab
+                        console.print(f"[green]✅ Successfully clicked tab '{tab}'[/green]")
+                        time.sleep(2)  # Wait for tab content to load
+                    else:
+                        console.print(f"[yellow]⚠️  Tab '{tab}' not found, capturing current view[/yellow]")
+
             # Step 4: Capture screenshot
             console.print("[cyan]Step 4: Capturing screenshot...[/cyan]")
-            label = f"RDS_{cluster_name}_{tab}" if tab else f"RDS_{cluster_name}"
+            label_base = (full_cluster_name or cluster_name or "RDS")
+            label = f"RDS_{label_base}_{tab}" if tab else f"RDS_{label_base}"
             screenshot_path = self.tool.capture_screenshot(label)
             
             if screenshot_path:
