@@ -3,6 +3,7 @@ Tool Executor - Executes tools that Claude decides to call
 """
 
 import os
+from dataclasses import asdict
 from typing import Dict, Any
 from datetime import datetime
 from rich.console import Console
@@ -14,6 +15,7 @@ from evidence_manager.local_evidence_manager import LocalEvidenceManager
 from evidence_manager.evidence_analyzer_v2 import EvidenceAnalyzerV2
 from evidence_manager.llm_evidence_analyzer import LLMEvidenceAnalyzer
 from evidence_manager.sharepoint_evidence_learner import SharePointEvidenceLearner
+from evidence_manager.document_intelligence import DocumentIntelligence
 from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced, ClickStrategy
 from tools.rds_navigator_enhanced import RDSNavigatorEnhanced
 from tools.aws_export_tool import export_aws_data
@@ -44,6 +46,7 @@ class ToolExecutor:
         self.evidence_manager = evidence_manager
         self.sharepoint = None
         self.llm = llm
+        self.document_intelligence = DocumentIntelligence(llm)
         # Reusable AWS browser session (UniversalScreenshotEnhanced) for non-RDS services
         self._aws_universal_session = None
         self._aws_session_account = None
@@ -56,7 +59,12 @@ class ToolExecutor:
             console.print("[green]✅ Universal Intelligence active - ALL tools can query the brain![/green]")
             
             # Initialize AI Orchestrator - the brain that directs everything
-            self.orchestrator = AIOrchestrator(llm, evidence_manager, self)
+            self.orchestrator = AIOrchestrator(
+                llm,
+                evidence_manager,
+                self,
+                document_intelligence=self.document_intelligence,
+            )
             console.print("[green]✅ AI Orchestrator active - brain will analyze evidence and direct tools![/green]")
             
             # Initialize intelligent tool wrappers
@@ -110,10 +118,13 @@ class ToolExecutor:
             
             elif tool_name == "upload_to_sharepoint":
                 return self._execute_upload(tool_input)
-            
+
             elif tool_name == "learn_from_sharepoint_url":
                 return self._execute_learn_from_sharepoint(tool_input)
-            
+
+            elif tool_name == "analyze_document_evidence":
+                return self._execute_analyze_document_evidence(tool_input)
+
             # Self-healing/debugging tools
             elif tool_name == "read_tool_source":
                 return self._execute_read_tool_source(tool_input)
@@ -923,7 +934,56 @@ class ToolExecutor:
                 "status": "error",
                 "error": f"Learning failed: {str(e)}"
             }
-    
+
+    def _execute_analyze_document_evidence(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Use DocumentIntelligence to reason about evidence files."""
+
+        if not self.document_intelligence:
+            return {
+                "status": "error",
+                "error": "Document intelligence module not available"
+            }
+
+        file_path = params.get('file_path')
+        files = params.get('files')
+        context = params.get('context')
+        metadata = params.get('metadata') or {}
+
+        try:
+            if file_path:
+                insight = self.document_intelligence.analyze_document(
+                    file_path,
+                    metadata=metadata,
+                    context=context,
+                )
+                return {
+                    "status": "success",
+                    "analysis": asdict(insight)
+                }
+
+            if files:
+                summary, insights = self.document_intelligence.build_brief_summary(
+                    files,
+                    context=context,
+                )
+                return {
+                    "status": "success",
+                    "summary": summary,
+                    "insights": [asdict(item) for item in insights]
+                }
+
+            return {
+                "status": "error",
+                "error": "Provide either file_path or files for analysis"
+            }
+
+        except Exception as exc:
+            console.print(f"[red]❌ Document analysis failed: {exc}[/red]")
+            return {
+                "status": "error",
+                "error": f"Document analysis failed: {exc}"
+            }
+
     def _execute_read_tool_source(self, params: Dict) -> Dict:
         """Execute read_tool_source - Read source code of a tool"""
         from ai_brain.self_healing_tools import read_tool_source_code
