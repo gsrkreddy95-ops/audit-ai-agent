@@ -660,20 +660,13 @@ class UniversalScreenshotEnhanced:
                 
                 # Case 4: On any other AWS page - don't navigate to SSO!
                 if current_url and ('aws.amazon.com' in current_url or 'awsapps.com' in current_url):
-                    console.print(f"[yellow]⚠️  Already on AWS page, skipping SSO navigation[/yellow]")
-                    # Wait for console to load
-                    time.sleep(5)
-                    # Check if we reached console
-                    final_url = self.driver.current_url
-                    if 'console.aws.amazon.com' in final_url:
-                        console.print(f"[green]✅ Reached AWS Console![/green]")
-                        return True
-                    else:
-                        console.print(f"[yellow]⚠️  Still on: {final_url}[/yellow]")
-                        return False
+                    console.print(f"[green]✅ Already on AWS page! Staying here (no SSO navigation)[/green]")
+                    console.print(f"[dim]Current URL: {current_url}[/dim]")
+                    return True  # ✅ Always return True if already on AWS!
                         
-            except:
-                pass
+            except Exception as e:
+                if self.debug:
+                    console.print(f"[dim]Session check exception: {str(e)[:80]}[/dim]")
             
             # ONLY navigate to SSO if NOT already on any AWS page
             if not duo_url:
