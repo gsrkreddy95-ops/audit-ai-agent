@@ -62,7 +62,54 @@ def get_tool_definitions(read_only_mode: bool = False) -> List[Dict]:
                 "required": ["rfi_code"]
             }
         },
-        
+
+        {
+            "name": "analyze_document_evidence",
+            "description": """Deeply analyze evidence documents (PDF, DOCX, CSV, JSON, images) using the LLM brain.
+
+This tool routes files through the Document Intelligence pipeline so the brain can:
+- Extract text or tabular structure from multiple formats
+- Summarize what the document proves for the audit requirement
+- Highlight key entities (accounts, resources, controls)
+- Recommend which fresh evidence to gather this year
+- Flag stale or missing information for self-healing workflows
+
+Use this after downloading evidence locally or when SharePoint metadata includes local paths. You can pass a single
+`file_path` or an array of `files` (objects containing at minimum `name` and `local_path`).""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Local path to a single evidence file (PDF, DOCX, CSV, JSON, image, etc.)."
+                    },
+                    "files": {
+                        "type": "array",
+                        "description": "Batch of files with metadata from SharePoint or local storage.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "local_path": {"type": "string"},
+                                "type": {"type": "string"},
+                                "size": {"type": "number"}
+                            }
+                        }
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Optional natural-language context about the audit requirement or questions for the brain."
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Additional metadata to pass with single file analysis (e.g., SharePoint folder info)."
+                    }
+                },
+                "required": [],
+                "additionalProperties": False
+            }
+        },
+
         {
             "name": "aws_take_screenshot",
             "description": """Takes screenshots of AWS Console pages with timestamps.

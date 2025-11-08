@@ -16,11 +16,14 @@ This is PROACTIVE intelligence, not reactive "ask when uncertain"
 
 import os
 import json
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+
+from ai_brain.plan_models import ExecutionPlan, PlanStep
+from evidence_manager.document_intelligence import DocumentIntelligence, DocumentInsight
 
 console = Console()
 
@@ -34,7 +37,8 @@ class AIOrchestrator:
     - AIOrchestrator: Brain says "here's what you'll do, execute it"
     """
     
-    def __init__(self, llm, evidence_manager, tool_executor):
+    def __init__(self, llm, evidence_manager, tool_executor,
+                 document_intelligence: Optional[DocumentIntelligence] = None):
         """
         Args:
             llm: LLM instance (Claude)
@@ -45,11 +49,45 @@ class AIOrchestrator:
         self.evidence_manager = evidence_manager
         self.tool_executor = tool_executor
         self.execution_plan = None
+        self.plan_model: Optional[ExecutionPlan] = None
         self.execution_history = []
         self.current_rfi = None
-        
+        self.document_intelligence = document_intelligence or DocumentIntelligence(llm)
+        self.latest_evidence_intelligence: List[DocumentInsight] = []
+
         console.print("\n[bold cyan]🧠 AI Orchestrator Initialized[/bold cyan]")
         console.print("[dim]  The Brain will analyze evidence and direct all tools[/dim]\n")
+
+    # ------------------------------------------------------------------
+    # LLM helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _strip_json_block(text: str) -> str:
+        """Remove Markdown fences and return the raw JSON payload."""
+
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned[3:].lstrip()
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].lstrip()
+            if "```" in cleaned:
+                cleaned = cleaned.rsplit("```", 1)[0]
+        return cleaned.strip()
+
+    def _call_llm_json(self, prompt: str, *, description: str) -> Tuple[Any, str]:
+        """Invoke the LLM expecting JSON output and return parsed data."""
+
+        if not self.llm:
+            raise RuntimeError("LLM is not configured for orchestrator operations")
+
+        response = self.llm.invoke(prompt)
+        content = getattr(response, "content", str(response))
+        cleaned = self._strip_json_block(content)
+
+        try:
+            return json.loads(cleaned), cleaned
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Failed to parse {description} JSON: {exc}") from exc
     
     def analyze_and_plan(self, rfi_code: str, previous_evidence_files: List[Dict]) -> Dict[str, Any]:
         """
@@ -68,7 +106,11 @@ class AIOrchestrator:
         console.print("[dim]  Studying previous year's evidence to plan collection...[/dim]\n")
         
         # Prepare evidence analysis prompt
-        evidence_summary = self._summarize_evidence_files(previous_evidence_files)
+        evidence_summary, insights = self._summarize_evidence_files(
+            previous_evidence_files,
+            rfi_code=rfi_code,
+        )
+        self.latest_evidence_intelligence = insights
         
         prompt = f"""You are the AI Brain orchestrating evidence collection for audit RFI {rfi_code}.
 
@@ -156,52 +198,61 @@ OUTPUT FORMAT (JSON):
 
 Create a comprehensive plan now:"""
 
-        # Get brain's analysis
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[cyan]Brain analyzing evidence patterns..."),
-            console=console
-        ) as progress:
-            progress.add_task("analyze", total=None)
-            
-            response = self.llm.invoke(prompt)
-            plan_text = response.content
-        
-        # Parse plan
         try:
-            # Clean up response (remove markdown fences if present)
-            plan_text = plan_text.strip()
-            if plan_text.startswith("```json"):
-                plan_text = plan_text[7:]
-            if plan_text.startswith("```"):
-                plan_text = plan_text[3:]
-            if plan_text.endswith("```"):
-                plan_text = plan_text[:-3]
-            plan_text = plan_text.strip()
-            
-            execution_plan = json.loads(plan_text)
-            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[cyan]Brain analyzing evidence patterns..."),
+                console=console
+            ) as progress:
+                progress.add_task("analyze", total=None)
+                plan_payload, raw_plan = self._call_llm_json(
+                    prompt,
+                    description="execution plan",
+                )
+
+            if not isinstance(plan_payload, dict):
+                raise ValueError("LLM returned non-object execution plan")
+
+            plan_dict = plan_payload
+            plan_obj = ExecutionPlan.from_dict(plan_dict)
+
             # Store plan
-            self.execution_plan = execution_plan
+            self.plan_model = plan_obj
+            self.execution_plan = plan_obj.to_dict()
             self.current_rfi = rfi_code
-            
+
             # Display plan
-            self._display_execution_plan(execution_plan)
-            
+            self._display_execution_plan(plan_obj)
+
+            evidence_payload = [
+                {
+                    "file_name": insight.file_name,
+                    "document_type": insight.document_type,
+                    "summary": insight.structured_insights.get("summary"),
+                    "recommended_actions": insight.structured_insights.get("recommended_actions", []),
+                    "key_entities": insight.structured_insights.get("key_entities", []),
+                    "confidence": insight.structured_insights.get("confidence"),
+                }
+                for insight in insights
+            ]
+
             return {
                 "status": "success",
-                "plan": execution_plan,
-                "message": f"Brain created {len(execution_plan.get('execution_plan', []))} step execution plan"
+                "plan": plan_obj.to_dict(),
+                "message": f"Brain created {len(plan_obj.steps)} step execution plan",
+                "plan_progress": plan_obj.summarise_progress(),
+                "evidence_intelligence": evidence_payload,
             }
         
-        except json.JSONDecodeError as e:
-            console.print(f"[red]❌ Failed to parse brain's plan: {e}[/red]")
-            console.print(f"[yellow]Raw response:[/yellow]\n{plan_text[:500]}")
-            
+        except Exception as e:
+            console.print(f"[red]❌ Failed to obtain execution plan: {e}[/red]")
+            if 'raw_plan' in locals():
+                console.print(f"[yellow]Raw response:[/yellow]\n{raw_plan[:500]}")
+
             return {
                 "status": "error",
-                "error": f"Failed to parse execution plan: {e}",
-                "raw_response": plan_text
+                "error": f"Failed to generate execution plan: {e}",
+                "raw_response": locals().get('raw_plan')
             }
     
     def execute_plan(self, plan: Optional[Dict] = None) -> Dict[str, Any]:
@@ -215,38 +266,44 @@ Create a comprehensive plan now:"""
             Execution results
         """
         if plan:
-            self.execution_plan = plan
-        
+            self.plan_model = ExecutionPlan.from_dict(plan)
+            self.execution_plan = self.plan_model.to_dict()
+
         if not self.execution_plan:
             return {
                 "status": "error",
                 "error": "No execution plan available. Call analyze_and_plan() first."
             }
-        
-        plan = self.execution_plan
-        rfi_code = plan.get('rfi_code')
-        steps = plan.get('execution_plan', [])
+
+        if not self.plan_model:
+            self.plan_model = ExecutionPlan.from_dict(self.execution_plan)
+
+        plan_obj = self.plan_model
+        plan = plan_obj.to_dict()
+        rfi_code = plan_obj.rfi_code
+        steps = plan_obj.steps
         
         console.print(f"\n[bold green]🚀 EXECUTING BRAIN'S PLAN FOR {rfi_code}[/bold green]")
         console.print(f"[dim]  {len(steps)} steps to execute[/dim]\n")
         
         results = []
-        completed_steps = []
-        
-        for step_info in steps:
-            step_num = step_info.get('step')
-            tool_name = step_info.get('tool')
-            description = step_info.get('description')
-            parameters = step_info.get('parameters', {})
-            validation = step_info.get('validation')
-            depends_on = step_info.get('depends_on', [])
-            if_fails = step_info.get('if_fails')
-            
+        completed_steps = [s.step for s in steps if s.status == 'completed']
+
+        for step_obj in steps:
+            step_num = step_obj.step
+            tool_name = step_obj.tool
+            description = step_obj.description
+            parameters = step_obj.parameters or {}
+            validation = step_obj.validation
+            depends_on = step_obj.depends_on or []
+            if_fails = step_obj.if_fails
+
+            step_obj.mark_in_progress()
+
             console.print(f"[cyan]━━━ Step {step_num}: {description} ━━━[/cyan]")
             console.print(f"[dim]  Tool: {tool_name}[/dim]")
             console.print(f"[dim]  Validation: {validation}[/dim]")
-            
-            # Check dependencies
+
             if depends_on:
                 missing_deps = [d for d in depends_on if d not in completed_steps]
                 if missing_deps:
@@ -256,27 +313,30 @@ Create a comprehensive plan now:"""
                         "status": "skipped",
                         "reason": f"Dependencies not met: {missing_deps}"
                     })
+                    step_obj.status = "skipped"
                     continue
-            
-            # Execute tool
+
             try:
                 console.print(f"[yellow]🔧 Executing {tool_name}...[/yellow]")
-                
+
                 result = self.tool_executor.execute_tool(tool_name, parameters)
-                
+
                 if result.get('status') == 'success':
                     console.print(f"[green]✅ Step {step_num} completed[/green]")
-                    
-                    # Brain validates output
+
                     is_valid = self._validate_step_output(
                         step_num=step_num,
                         tool_name=tool_name,
                         result=result,
                         validation_criteria=validation
                     )
-                    
+
                     if is_valid:
                         completed_steps.append(step_num)
+                        step_obj.mark_completed(
+                            output_summary=self._summarize_tool_output(result),
+                            validation_notes="Validated successfully"
+                        )
                         results.append({
                             "step": step_num,
                             "status": "success",
@@ -286,6 +346,7 @@ Create a comprehensive plan now:"""
                         })
                     else:
                         console.print(f"[yellow]⚠️  Output validation failed[/yellow]")
+                        step_obj.mark_invalid("Failed validation criteria")
                         results.append({
                             "step": step_num,
                             "status": "invalid_output",
@@ -295,15 +356,15 @@ Create a comprehensive plan now:"""
                         })
                 else:
                     console.print(f"[red]❌ Step {step_num} failed: {result.get('error')}[/red]")
-                    
-                    # Brain decides what to do
+
                     recovery_action = self._handle_step_failure(
                         step_num=step_num,
                         tool_name=tool_name,
                         error=result.get('error'),
                         if_fails_guidance=if_fails
                     )
-                    
+
+                    step_obj.mark_failed(result.get('error', 'Unknown error'))
                     results.append({
                         "step": step_num,
                         "status": "failed",
@@ -311,11 +372,12 @@ Create a comprehensive plan now:"""
                         "error": result.get('error'),
                         "recovery_action": recovery_action
                     })
-                
+
                 console.print()
-                
+
             except Exception as e:
                 console.print(f"[red]❌ Step {step_num} exception: {e}[/red]\n")
+                step_obj.mark_failed(str(e))
                 results.append({
                     "step": step_num,
                     "status": "exception",
@@ -330,18 +392,22 @@ Create a comprehensive plan now:"""
         self.execution_history.append({
             "timestamp": datetime.now().isoformat(),
             "rfi_code": rfi_code,
-            "plan": plan,
+            "plan": plan_obj.to_dict(),
             "results": results,
             "assessment": final_assessment
         })
-        
+
+        # Persist latest plan snapshot for monitoring hooks
+        self.execution_plan = plan_obj.to_dict()
+
         return {
             "status": "completed",
             "rfi_code": rfi_code,
-            "steps_completed": len(completed_steps),
-            "steps_total": len(steps),
+            "steps_completed": len([s for s in plan_obj.steps if s.status == 'completed']),
+            "steps_total": len(plan_obj.steps),
             "results": results,
-            "assessment": final_assessment
+            "assessment": final_assessment,
+            "plan": plan_obj.to_dict()
         }
     
     def monitor_tool_action(self, tool_name: str, action: str, parameters: Dict) -> Dict[str, Any]:
@@ -404,39 +470,81 @@ Create a comprehensive plan now:"""
             
             return guidance
     
-    def _summarize_evidence_files(self, files: List[Dict]) -> str:
-        """Summarize evidence files for brain analysis"""
+    def _summarize_evidence_files(self, files: List[Dict],
+                                  rfi_code: Optional[str] = None) -> Tuple[str, List[DocumentInsight]]:
+        """Summarize evidence files for brain analysis."""
         if not files:
-            return "No previous evidence found"
-        
+            return "No previous evidence found", []
+
+        context = rfi_code or self.current_rfi
+
+        if self.document_intelligence:
+            return self.document_intelligence.build_brief_summary(files, context=context)
+
         summary = []
         for file_info in files:
             name = file_info.get('name', 'unknown')
             file_type = file_info.get('type', 'unknown')
             size = file_info.get('size', 0)
-            
             summary.append(f"- {name} ({file_type}, {size} bytes)")
-        
-        return "\n".join(summary)
+
+        return "\n".join(summary), []
     
-    def _display_execution_plan(self, plan: Dict):
-        """Display the brain's execution plan"""
+    def _display_execution_plan(self, plan: Any):
+        """Display the brain's execution plan."""
+
+        if isinstance(plan, ExecutionPlan):
+            plan_dict = plan.to_dict()
+            steps_iterable = plan.steps
+        else:
+            plan_dict = plan or {}
+            steps_iterable = plan_dict.get('execution_plan', [])
+
         console.print(Panel.fit(
             f"[bold green]Brain's Execution Plan[/bold green]\n\n"
-            f"[cyan]RFI:[/cyan] {plan.get('rfi_code')}\n"
-            f"[cyan]Evidence Type:[/cyan] {plan.get('evidence_type')}\n"
-            f"[cyan]Strategy:[/cyan] {plan.get('collection_strategy')}\n"
-            f"[cyan]Steps:[/cyan] {len(plan.get('execution_plan', []))}\n"
-            f"[cyan]Estimated Time:[/cyan] {plan.get('estimated_time_minutes', 'N/A')} minutes",
+            f"[cyan]RFI:[/cyan] {plan_dict.get('rfi_code')}\n"
+            f"[cyan]Evidence Type:[/cyan] {plan_dict.get('evidence_type')}\n"
+            f"[cyan]Strategy:[/cyan] {plan_dict.get('collection_strategy')}\n"
+            f"[cyan]Steps:[/cyan] {len(plan_dict.get('execution_plan', []))}\n"
+            f"[cyan]Estimated Time:[/cyan] {plan_dict.get('estimated_time_minutes', 'N/A')} minutes",
             border_style="green"
         ))
-        
-        # Show each step
-        for step in plan.get('execution_plan', []):
-            console.print(f"\n[yellow]Step {step.get('step')}:[/yellow] {step.get('description')}")
-            console.print(f"[dim]  Tool: {step.get('tool')}[/dim]")
-            console.print(f"[dim]  Validation: {step.get('validation')}[/dim]")
-    
+
+        for step in steps_iterable:
+            if isinstance(step, PlanStep):
+                step_no = step.step
+                description = step.description
+                tool = step.tool
+                validation = step.validation
+                status = step.status
+            else:
+                step_no = step.get('step')
+                description = step.get('description')
+                tool = step.get('tool')
+                validation = step.get('validation')
+                status = step.get('status', 'pending')
+
+            console.print(f"\n[yellow]Step {step_no}:[/yellow] {description}")
+            console.print(f"[dim]  Tool: {tool}[/dim]")
+            console.print(f"[dim]  Validation: {validation}[/dim]")
+            console.print(f"[dim]  Status: {status}[/dim]")
+
+    def _summarize_tool_output(self, result: Dict[str, Any]) -> str:
+        """Create a compact textual summary of a tool result."""
+
+        if not isinstance(result, dict):
+            return str(result)[:400]
+
+        payload = result.get('result', result)
+        if isinstance(payload, (dict, list)):
+            try:
+                return json.dumps(payload, default=str)[:400]
+            except Exception:
+                return str(payload)[:400]
+        if isinstance(payload, str):
+            return payload[:400]
+        return str(payload)[:400]
+
     def _validate_step_output(self, step_num: int, tool_name: str, 
                               result: Dict, validation_criteria: str) -> bool:
         """
@@ -467,9 +575,14 @@ Respond with JSON:
 }}"""
 
         try:
-            response = self.llm.invoke(prompt)
-            validation = json.loads(response.content.strip().replace("```json", "").replace("```", "").strip())
-            
+            validation, _ = self._call_llm_json(
+                prompt,
+                description=f"validation for step {step_num}",
+            )
+
+            if not isinstance(validation, dict):
+                raise ValueError("Validation response was not a JSON object")
+
             is_valid = validation.get('valid', False)
             reasoning = validation.get('reasoning', '')
             
@@ -523,9 +636,14 @@ Respond with JSON:
 }}"""
 
         try:
-            response = self.llm.invoke(prompt)
-            recovery = json.loads(response.content.strip().replace("```json", "").replace("```", "").strip())
-            
+            recovery, _ = self._call_llm_json(
+                prompt,
+                description=f"failure handling for step {step_num}",
+            )
+
+            if not isinstance(recovery, dict):
+                raise ValueError("Recovery response was not a JSON object")
+
             action = recovery.get('action', 'skip')
             reasoning = recovery.get('reasoning', '')
             
@@ -571,9 +689,14 @@ Provide assessment in JSON:
 }}"""
 
         try:
-            response = self.llm.invoke(prompt)
-            assessment = json.loads(response.content.strip().replace("```json", "").replace("```", "").strip())
-            
+            assessment, _ = self._call_llm_json(
+                prompt,
+                description="execution assessment",
+            )
+
+            if not isinstance(assessment, dict):
+                raise ValueError("Assessment response was not a JSON object")
+
             success = assessment.get('overall_success', False)
             quality = assessment.get('quality_score', 0)
             
@@ -636,9 +759,14 @@ Respond with JSON:
 }}"""
 
         try:
-            response = self.llm.invoke(prompt)
-            guidance = json.loads(response.content.strip().replace("```json", "").replace("```", "").strip())
-            
+            guidance, _ = self._call_llm_json(
+                prompt,
+                description="unplanned action guidance",
+            )
+
+            if not isinstance(guidance, dict):
+                raise ValueError("Guidance response was not a JSON object")
+
             approved = guidance.get('approved', False)
             reasoning = guidance.get('reasoning', '')
             
