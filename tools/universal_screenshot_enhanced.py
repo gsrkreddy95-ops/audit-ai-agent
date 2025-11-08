@@ -893,6 +893,11 @@ class UniversalScreenshotEnhanced:
                         except Exception as e:
                             console.print(f"[dim]   Page prep skipped: {str(e)[:40]}[/dim]")
                         
+                        # Strategy 0.5: Directly submit the AWS SAML form before other fallbacks
+                        if self._force_saml_sign_in_direct():
+                            time.sleep(2)
+                            return True
+                        
                         # Strategy 1: PLAYWRIGHT click with WAIT (get CURRENT page!)
                         page = self._get_current_playwright_page()
                         if page:
@@ -1147,9 +1152,152 @@ class UniversalScreenshotEnhanced:
                         continue
             
             return False
-            
+        
         except Exception as e:
             # Silently fail - error will be shown once by caller
+            return False
+
+    def _force_saml_sign_in_direct(self) -> bool:
+        """Force-click or submit the AWS SAML Sign in button when Selenium struggles."""
+        if not self.driver:
+            return False
+        
+        try:
+            current_url = self.driver.current_url or ""
+        except Exception:
+            current_url = ""
+        
+        if "signin.aws" not in current_url:
+            return False
+        
+        try:
+            result = self.driver.execute_script("""
+                return (function () {
+                    const response = {success: false, method: null, reason: null};
+                    const forms = Array.from(document.querySelectorAll('form'));
+                    const formCandidates = [
+                        document.querySelector('#saml_form'),
+                        document.querySelector('form[action*="saml"]'),
+                        document.querySelector('form[action*="signin"]')
+                    ].filter(Boolean);
+                    if (forms.length) {
+                        formCandidates.push(forms.find(f => {
+                            const id = (f.id || '').toLowerCase();
+                            return id.includes('saml');
+                        }));
+                    }
+                    const targetForm = formCandidates.find(Boolean) || forms[0] || null;
+                    
+                    if (!targetForm) {
+                        response.reason = 'no-form';
+                        return response;
+                    }
+                    
+                    const selectors = [
+                        '#signin_button',
+                        'form#saml_form button[type="submit"]',
+                        'form#saml_form input[type="submit"]',
+                        'button.awsui-button-variant-primary',
+                        'button[type="submit"]',
+                        'input[type="submit"]'
+                    ];
+                    
+                    for (const selector of selectors) {
+                        const btn = targetForm.querySelector(selector) || document.querySelector(selector);
+                        if (!btn) continue;
+                        
+                        btn.disabled = false;
+                        btn.removeAttribute('disabled');
+                        btn.style.pointerEvents = 'auto';
+                        btn.style.opacity = '1';
+                        
+                        try { btn.scrollIntoView({behavior: 'instant', block: 'center'}); } catch (err) {}
+                        
+                        try {
+                            btn.click();
+                            response.success = true;
+                            response.method = 'click:' + selector;
+                            return response;
+                        } catch (err) {
+                            try {
+                                const evt = new MouseEvent('click', {view: window, bubbles: true, cancelable: true});
+                                btn.dispatchEvent(evt);
+                                response.success = true;
+                                response.method = 'dispatch:' + selector;
+                                return response;
+                            } catch (err2) {
+                                continue;
+                            }
+                        }
+                    }
+                    
+                    try {
+                        targetForm.submit();
+                        response.success = true;
+                        response.method = 'form.submit';
+                        return response;
+                    } catch (err3) {
+                        response.reason = err3.message || 'form-submit-failed';
+                        return response;
+                    }
+                })();
+            """)
+            
+            if result and result.get("success"):
+                console.print(f"[green]   ✅ Triggered Sign in via {result.get('method')}[/green]")
+                return True
+            else:
+                detail = result.get("reason") if result else "no-result"
+                console.print(f"[dim]   Direct SAML submit failed ({detail})[/dim]")
+        except Exception as e:
+            console.print(f"[dim]   Direct SAML submit error: {str(e)[:60]}[/dim]")
+        
+        # Selenium fallbacks (ActionChains + keyboard)
+        sign_in_locators = [
+            (By.ID, "signin_button"),
+            (By.CSS_SELECTOR, "form#saml_form button[type='submit']"),
+            (By.CSS_SELECTOR, "form#saml_form input[type='submit']"),
+            (By.CSS_SELECTOR, "button.awsui-button-variant-primary"),
+            (By.XPATH, "//button[contains(translate(., 'SIGNIN', 'signin'), 'sign in')]"),
+            (By.XPATH, "//input[@type='submit' and contains(translate(@value, 'SIGNIN', 'signin'), 'sign in')]"),
+        ]
+        
+        for by, locator in sign_in_locators:
+            try:
+                btn = self.driver.find_element(by, locator)
+            except Exception:
+                continue
+            
+            try:
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", btn)
+            except Exception:
+                pass
+            time.sleep(0.2)
+            
+            for strategy in ("direct", "actions", "keyboard"):
+                try:
+                    if strategy == "direct":
+                        btn.click()
+                    elif strategy == "actions":
+                        ActionChains(self.driver).move_to_element(btn).pause(0.1).click(btn).perform()
+                    else:
+                        btn.send_keys(Keys.SPACE)
+                        time.sleep(0.1)
+                        btn.send_keys(Keys.ENTER)
+                    console.print(f"[green]   ✅ Sign in triggered ({locator} | {strategy})[/green]")
+                    return True
+                except Exception:
+                    continue
+        
+        # Final fallback: send ENTER to body
+        try:
+            body = self.driver.find_element(By.TAG_NAME, "body")
+            body.send_keys(Keys.END)
+            time.sleep(0.1)
+            body.send_keys(Keys.ENTER)
+            console.print("[green]   ✅ Sign in triggered via ENTER key[/green]")
+            return True
+        except Exception:
             return False
     
     # ==================== AWS SSO / PROFILE HANDLING ====================
