@@ -96,13 +96,24 @@ class UniversalScreenshotEnhanced:
     don't break constructor (e.g., tracing, profiling). Unknown kwargs are ignored.
     """
     
-    def __init__(self, headless: bool = False, timeout: int = 20, debug: bool = False, **kwargs):
+    def __init__(self, headless: bool = False, timeout: int = 20, debug: bool = False, persistent_profile: bool = False, **kwargs):
         self.headless = headless
         self.timeout = timeout
         self.debug = debug
+        self.persistent_profile = persistent_profile  # NEW: Control cookie persistence
         self.driver = None
         self.wait = None
-        self.user_data_dir = os.path.expanduser('~/.audit-agent-universal-selenium')
+        
+        # Only use persistent profile if explicitly requested
+        if self.persistent_profile:
+            self.user_data_dir = os.path.expanduser('~/.audit-agent-universal-selenium')
+            if self.debug:
+                console.print(f"[dim]📂 Using persistent profile: {self.user_data_dir}[/dim]")
+        else:
+            self.user_data_dir = None  # Use temporary profile
+            if self.debug:
+                console.print(f"[dim]🔄 Using temporary profile (fresh session each run)[/dim]")
+        
         self.click_history = []  # Track what we clicked
         self.navigation_history = []  # Track navigation
         self._extra_config = kwargs  # Preserve for inspection/logging if needed
@@ -130,7 +141,15 @@ class UniversalScreenshotEnhanced:
                 options = uc.ChromeOptions()
                 if self.headless:
                     options.add_argument('--headless=new')
-                options.add_argument(f'--user-data-dir={self.user_data_dir}')
+                
+                # Only use persistent profile if requested (default: temporary profile)
+                if self.user_data_dir:
+                    options.add_argument(f'--user-data-dir={self.user_data_dir}')
+                    console.print(f"[dim]   Using persistent profile (cookies saved)[/dim]")
+                else:
+                    # Use temporary profile - no cookie persistence!
+                    console.print(f"[dim]   Using temporary profile (no cookie persistence)[/dim]")
+                
                 options.add_argument('--window-size=1920,1080')
                 options.add_argument('--start-maximized')
                 options.add_argument('--disable-blink-features=AutomationControlled')
@@ -1980,9 +1999,60 @@ class UniversalScreenshotEnhanced:
                 
                 # Finally close the browser
                 self.driver.quit()
-                console.print("[green]🔒 Browser closed and sessions cleared[/green]")
+                console.print("[green]🔒 Browser closed[/green]")
+                
+                # CRITICAL: Clear AWS cookies from disk (user data directory)
+                # The persistent user data dir saves cookies to disk, which get reloaded on next launch
+                if self.user_data_dir:  # Only if using persistent profile
+                    self._clear_aws_cookies_from_disk()
+                else:
+                    console.print("[dim]   Temporary profile used - no disk cleanup needed[/dim]")
+                
         except Exception as e:
             console.print(f"[yellow]⚠️  Error closing browser: {str(e)[:80]}[/yellow]")
+    
+    def _clear_aws_cookies_from_disk(self):
+        """Clear AWS-related cookies from the persistent user data directory"""
+        try:
+            import shutil
+            import glob
+            
+            console.print("[dim]🧹 Clearing AWS cookies from disk...[/dim]")
+            
+            # Find and delete AWS cookie files in user data directory
+            cookie_paths = [
+                os.path.join(self.user_data_dir, "Default", "Cookies"),
+                os.path.join(self.user_data_dir, "Default", "Cookies-journal"),
+                os.path.join(self.user_data_dir, "Default", "Network", "Cookies"),
+                os.path.join(self.user_data_dir, "Default", "Session Storage"),
+                os.path.join(self.user_data_dir, "Default", "Local Storage"),
+            ]
+            
+            deleted_count = 0
+            for cookie_path in cookie_paths:
+                if os.path.exists(cookie_path):
+                    try:
+                        if os.path.isfile(cookie_path):
+                            os.remove(cookie_path)
+                            deleted_count += 1
+                        elif os.path.isdir(cookie_path):
+                            # Clear AWS-related files only
+                            for root, dirs, files in os.walk(cookie_path):
+                                for file in files:
+                                    if any(aws_domain in file.lower() for aws_domain in ['aws', 'amazon', 'duo', 'signin']):
+                                        os.remove(os.path.join(root, file))
+                                        deleted_count += 1
+                    except Exception as e:
+                        if self.debug:
+                            console.print(f"[dim]   Skip {cookie_path}: {str(e)[:40]}[/dim]")
+            
+            if deleted_count > 0:
+                console.print(f"[green]✅ Cleared {deleted_count} cookie/storage files from disk[/green]")
+            else:
+                console.print("[dim]   No cookie files found to clear[/dim]")
+                
+        except Exception as e:
+            console.print(f"[dim]   Disk cleanup: {str(e)[:60]}[/dim]")
     
     def __del__(self):
         """Destructor to ensure browser is closed"""
