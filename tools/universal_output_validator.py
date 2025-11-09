@@ -23,6 +23,7 @@ import json
 from typing import Dict, List, Optional, Any
 from rich.console import Console
 from datetime import datetime
+from tools.file_content_validator import FileContentValidator  # NEW
 
 console = Console()
 
@@ -41,6 +42,7 @@ class UniversalOutputValidator:
     def __init__(self):
         self.debug = True
         self.validation_history = []
+        self.file_validator = FileContentValidator()  # NEW: File content validation
     
     def validate_tool_output(
         self,
@@ -128,6 +130,7 @@ class UniversalOutputValidator:
         2. File is not empty
         3. Data contains expected fields
         4. Row count matches expected
+        5. 🆕 DEEP CONTENT VALIDATION (CSV columns, JSON schema, Excel sheets)
         """
         validation_result = {
             "valid": False,
@@ -185,11 +188,26 @@ class UniversalOutputValidator:
                 console.print(f"[green]✅ Exported {row_count} rows[/green]")
                 validation_result["tool_specific_checks"]["has_data"] = True
         
+        # 🆕 Check 4: DEEP CONTENT VALIDATION
+        console.print(f"\n[bold yellow]🔍 DEEP CONTENT VALIDATION...[/bold yellow]")
+        file_content_result = self.file_validator.validate_file_content(file_path)
+        
+        # Merge content validation results
+        if file_content_result.get("valid"):
+            console.print(f"[green]✅ Content validation passed[/green]")
+            validation_result["tool_specific_checks"]["content_valid"] = True
+            
+            # Add file stats to result
+            validation_result["file_stats"] = file_content_result.get("file_stats", {})
+        else:
+            console.print(f"[yellow]⚠️  Content validation issues: {file_content_result.get('issues')}[/yellow]")
+            validation_result["issues"].extend(file_content_result.get("issues", []))
+        
         # Calculate confidence
         checks_passed = sum(1 for v in validation_result["tool_specific_checks"].values() if v)
-        total_checks = 3  # file_exists, file_not_empty, has_data
+        total_checks = 4  # file_exists, file_not_empty, has_data, content_valid
         validation_result["confidence"] = checks_passed / total_checks
-        validation_result["valid"] = validation_result["confidence"] >= 0.67  # 2 out of 3
+        validation_result["valid"] = validation_result["confidence"] >= 0.75  # 3 out of 4
         
         if validation_result["valid"]:
             console.print(f"\n[green]✅ Export validated (Confidence: {validation_result['confidence']*100:.0f}%)[/green]")
