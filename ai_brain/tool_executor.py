@@ -3,6 +3,7 @@ Tool Executor - Executes tools that Claude decides to call
 """
 
 import os
+import time  # ← SELF-HEAL FIX: Added for time.sleep() calls
 from dataclasses import asdict
 from typing import Dict, Any
 from datetime import datetime

@@ -1,0 +1,18 @@
+{
+  "fixes": [
+    {
+      "timestamp": "2025-11-09T03:26:04.725471",
+      "tool_name": "aws_take_screenshot",
+      "issue": "Section navigation losing service context and returning to homepage",
+      "success": true,
+      "details": {
+        "file": "ai_brain/tool_executor.py",
+        "method": "_execute_aws_screenshot",
+        "lines_changed": "492-519",
+        "fix_type": "Added recovery logic and wait times",
+        "test_result": "pending - user to test"
+      },
+      "error": null
+    }
+  ]
+}
