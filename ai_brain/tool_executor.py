@@ -336,6 +336,11 @@ class ToolExecutor:
             role_name = params.get('aws_role') or params.get('role_name')
             profile_name = params.get('aws_profile') or params.get('profile')
             
+            # NEW: Section navigation parameters
+            section_name = params.get('section_name', '')
+            select_first_resource = params.get('select_first_resource', False)
+            resource_index = params.get('resource_index', 0)
+            
             # Decode HTML entities (e.g., &amp; -> &)
             if config_tab:
                 import html
@@ -439,14 +444,38 @@ class ToolExecutor:
                         browser.navigate_to_url(service_url)
                         time.sleep(3)  # Wait for page load
                     else:
-                        console.print(f"[yellow]⚠️  No direct URL for {service}, using search fallback...[/yellow]")
-                        # Get universal navigator for search fallback
+                        # Use UNIVERSAL NAVIGATOR for ALL other services!
+                        console.print(f"[yellow]🔍 Using Universal Navigator for {service.upper()}...[/yellow]")
                         universal_nav = BrowserSessionManager.get_universal_navigator()
                         if universal_nav:
-                            universal_nav.navigate_to_service(service, use_search=True)
+                            # Navigate to service (works for ANY service!)
+                            if not universal_nav.navigate_to_service(service, use_search=True):
+                                console.print(f"[red]❌ Failed to navigate to {service}[/red]")
+                                return {
+                                    "status": "error",
+                                    "error": f"Failed to navigate to {service}"
+                                }
+                            
+                            # NEW: Navigate to specific section if specified
+                            if section_name:
+                                console.print(f"[cyan]🧭 Navigating to section: '{section_name}'...[/cyan]")
+                                if not universal_nav.navigate_to_section(
+                                    section_name=section_name,
+                                    click_first_resource=select_first_resource,
+                                    resource_name=resource_name,
+                                    resource_index=resource_index
+                                ):
+                                    console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
+                                    # Continue anyway - maybe we're already there
+                        else:
+                            console.print(f"[red]❌ Universal navigator not available[/red]")
+                            return {
+                                "status": "error",
+                                "error": "Universal navigator not available"
+                            }
 
-                    # Navigate to specific resource if specified
-                    if resource_name:
+                    # Navigate to specific resource if specified (and section_name not used)
+                    if resource_name and not section_name:
                         console.print(f"[yellow]🔍 Searching for resource: {resource_name}[/yellow]")
                         # Try to find and click the resource
                         element = browser.find_element_intelligent(resource_name)

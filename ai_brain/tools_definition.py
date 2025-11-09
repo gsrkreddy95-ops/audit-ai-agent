@@ -118,11 +118,24 @@ Use this after downloading evidence locally or when SharePoint metadata includes
             - Opens AWS Console in browser
             - Authenticates with duo-sso if needed (prompts user for MFA)
             - Navigates to specified service/resource
+            - Can navigate to specific sections within services (e.g., "Custom Domain Names" in API Gateway)
+            - Can select resources from lists/tables
             - Takes scrolling screenshots for long lists (e.g., 87 S3 buckets)
             - Adds timestamp to screenshot
             - Saves to local evidence folder
             
-            Supports all AWS services: RDS, S3, IAM, EC2, VPC, CloudWatch, etc.
+            Supports ALL AWS services (not limited to enum list!):
+            RDS, S3, IAM, EC2, VPC, CloudWatch, API Gateway, Lambda, DynamoDB, ECS, EKS, CloudFront, etc.
+            
+            NEW FEATURES:
+            - Universal navigation: Can navigate to ANY AWS service (no predefined list needed!)
+            - Section navigation: Navigate to specific pages within a service
+            - Resource selection: Automatically select first resource or specific resource by name
+            
+            Examples:
+            1. Navigate to API Gateway → Custom Domain Names → Select first domain
+            2. Navigate to RDS → Databases → Select "prod-cluster-01"
+            3. Navigate to EC2 → Load Balancers → Select ALB by name
             
             IMPORTANT: Audit evidence requires PRODUCTION accounts only!
             Before using this tool:
@@ -142,13 +155,23 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                 "properties": {
                     "service": {
                         "type": "string",
-                        "description": "AWS service name",
-                        "enum": ["rds", "s3", "iam", "ec2", "vpc", "cloudwatch", "lambda", "dynamodb", "cloudtrail", "config"]
+                        "description": "AWS service name (e.g., 'rds', 'apigateway', 's3', 'ec2', 'lambda', etc.) - Universal navigator supports ALL AWS services!"
                     },
                     "resource_type": {
                         "type": "string",
-                        "description": "Type of resource or page to screenshot",
-                        "examples": ["database", "cluster", "bucket", "users", "roles", "instances", "security-groups"]
+                        "description": "Type of resource or page to screenshot (e.g., 'database', 'cluster', 'bucket', 'custom-domain-names', 'load-balancers')"
+                    },
+                    "section_name": {
+                        "type": "string",
+                        "description": """Specific section within the service to navigate to (NEW!).
+                        Examples:
+                        - API Gateway: 'Custom Domain Names', 'APIs', 'VPC Links'
+                        - RDS: 'Databases', 'Clusters', 'Snapshots', 'Parameter Groups'
+                        - EC2: 'Instances', 'Load Balancers', 'Security Groups', 'Key Pairs'
+                        - Lambda: 'Functions', 'Layers', 'Applications'
+                        
+                        If not provided, navigates to service homepage.
+                        """
                     },
                     "resource_name": {
                         "type": "string",
@@ -158,6 +181,9 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                         - S3: 'my-audit-bucket', 'backup-storage-bucket' (NEVER use 'bucket' or 's3_console')  
                         - EC2: 'i-0123456789abcdef0' (NEVER use 'instance' or 'ec2_console')
                         - Lambda: 'process-data-function' (NEVER use 'function' or 'lambda_console')
+                        - API Gateway: 'api.example.com' (domain name)
+                        
+                        NEW: Can also be used with section_name to select specific resource after navigating to section.
                         
                         CRITICAL: If you don't know the specific name:
                         1. First use aws_list_resources or list_aws_resources to get available names
@@ -167,15 +193,21 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                         Leave empty ONLY for dashboard/list screenshots (no config tabs).
                         """
                     },
+                    "select_first_resource": {
+                        "type": "boolean",
+                        "description": "If true, automatically selects the first resource in the list after navigating to section (NEW!). Default: false"
+                    },
+                    "resource_index": {
+                        "type": "integer",
+                        "description": "Index of resource to select (0 = first, 1 = second, etc.). Only used if select_first_resource is true and resource_name is not provided. Default: 0"
+                    },
                     "aws_account": {
                         "type": "string",
-                        "description": "AWS PRODUCTION account profile name (REQUIRED - must ask user to confirm!). For audit evidence, use production accounts only: ctr-prod, sxo101, sxo202. DO NOT use ctr-int or ctr-test for audit evidence.",
-                        "enum": ["ctr-prod", "sxo101", "sxo202", "ctr-int", "ctr-test"]
+                        "description": "AWS PRODUCTION account profile name (REQUIRED - must ask user to confirm!). For audit evidence, use production accounts only: ctr-prod, sxo101, sxo202. DO NOT use ctr-int or ctr-test for audit evidence."
                     },
                     "aws_region": {
                         "type": "string",
-                        "description": "AWS region code (REQUIRED - must ask user to confirm!). Common regions: us-east-1 (NAM), eu-west-1 (EU), ap-southeast-1 (APIC). Check previous evidence for which regions were used.",
-                        "examples": ["us-east-1", "us-west-2", "eu-west-1", "ap-southeast-1"]
+                        "description": "AWS region code (REQUIRED - must ask user to confirm!). Common regions: us-east-1 (NAM), eu-west-1 (EU), ap-southeast-1 (APIC). Check previous evidence for which regions were used."
                     },
                     "config_tab": {
                         "type": "string",
