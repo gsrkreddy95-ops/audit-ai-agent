@@ -178,6 +178,39 @@ class ToolExecutor:
             elif tool_name == "analyze_past_evidence":
                 return self._execute_analyze_past_evidence(tool_input)
             
+            # === JIRA INTEGRATION TOOLS ===
+            elif tool_name == "jira_list_tickets":
+                return self._execute_jira_list_tickets(tool_input)
+            
+            elif tool_name == "jira_search_jql":
+                return self._execute_jira_search_jql(tool_input)
+            
+            elif tool_name == "jira_get_ticket":
+                return self._execute_jira_get_ticket(tool_input)
+            
+            # === CONFLUENCE INTEGRATION TOOLS ===
+            elif tool_name == "confluence_search":
+                return self._execute_confluence_search(tool_input)
+            
+            elif tool_name == "confluence_get_page":
+                return self._execute_confluence_get_page(tool_input)
+            
+            elif tool_name == "confluence_list_space":
+                return self._execute_confluence_list_space(tool_input)
+            
+            # === GITHUB INTEGRATION TOOLS ===
+            elif tool_name == "github_list_prs":
+                return self._execute_github_list_prs(tool_input)
+            
+            elif tool_name == "github_get_pr":
+                return self._execute_github_get_pr(tool_input)
+            
+            elif tool_name == "github_search_code":
+                return self._execute_github_search_code(tool_input)
+            
+            elif tool_name == "github_list_issues":
+                return self._execute_github_list_issues(tool_input)
+            
             else:
                 return {
                     "status": "error",
@@ -1448,6 +1481,318 @@ class ToolExecutor:
                 "status": "error",
                 "error": f"Evidence analysis failed: {str(e)}"
             }
+    
+    # === JIRA INTEGRATION IMPLEMENTATIONS ===
+    def _execute_jira_list_tickets(self, params: Dict) -> Dict:
+        """Execute Jira list tickets"""
+        try:
+            from integrations import JiraIntegration
+            
+            jira = JiraIntegration()
+            if not jira.jira:
+                return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            tickets = jira.list_tickets(
+                project=params.get('project'),
+                labels=params.get('labels'),
+                status=params.get('status'),
+                assignee=params.get('assignee'),
+                priority=params.get('priority'),
+                issue_type=params.get('issue_type'),
+                max_results=params.get('max_results', 50)
+            )
+            
+            # Export if requested
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and tickets:
+                export_path = jira.export_tickets(tickets, output_format=export_format)
+            
+            return {
+                "status": "success",
+                "result": {
+                    "tickets": tickets,
+                    "count": len(tickets),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Jira list tickets failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_jira_search_jql(self, params: Dict) -> Dict:
+        """Execute Jira JQL search"""
+        try:
+            from integrations import JiraIntegration
+            
+            jira = JiraIntegration()
+            if not jira.jira:
+                return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            tickets = jira.search_jql(
+                jql_query=params.get('jql_query'),
+                max_results=params.get('max_results', 100)
+            )
+            
+            # Export if requested
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and tickets:
+                export_path = jira.export_tickets(tickets, output_format=export_format)
+            
+            return {
+                "status": "success",
+                "result": {
+                    "tickets": tickets,
+                    "count": len(tickets),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Jira JQL search failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_jira_get_ticket(self, params: Dict) -> Dict:
+        """Execute Jira get ticket"""
+        try:
+            from integrations import JiraIntegration
+            
+            jira = JiraIntegration()
+            if not jira.jira:
+                return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            ticket = jira.get_ticket(ticket_key=params.get('ticket_key'))
+            
+            if not ticket:
+                return {"status": "error", "error": f"Ticket {params.get('ticket_key')} not found"}
+            
+            return {
+                "status": "success",
+                "result": ticket
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Jira get ticket failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    # === CONFLUENCE INTEGRATION IMPLEMENTATIONS ===
+    def _execute_confluence_search(self, params: Dict) -> Dict:
+        """Execute Confluence search"""
+        try:
+            from integrations import ConfluenceIntegration
+            
+            confluence = ConfluenceIntegration()
+            if not confluence.confluence:
+                return {"status": "error", "error": "Confluence not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            pages = confluence.search_documents(
+                query=params.get('query'),
+                space=params.get('space'),
+                limit=params.get('limit', 50)
+            )
+            
+            # Export if requested
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and pages:
+                export_path = confluence.export_pages(pages, output_format=export_format)
+            
+            return {
+                "status": "success",
+                "result": {
+                    "pages": pages,
+                    "count": len(pages),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Confluence search failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_confluence_get_page(self, params: Dict) -> Dict:
+        """Execute Confluence get page"""
+        try:
+            from integrations import ConfluenceIntegration
+            
+            confluence = ConfluenceIntegration()
+            if not confluence.confluence:
+                return {"status": "error", "error": "Confluence not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            page = confluence.get_page(
+                page_id=params.get('page_id'),
+                page_title=params.get('page_title'),
+                space=params.get('space')
+            )
+            
+            if not page:
+                return {"status": "error", "error": "Page not found"}
+            
+            # Convert to markdown if requested
+            if params.get('as_markdown'):
+                markdown = confluence.get_page_content_as_markdown(page.get('id'))
+                page['content_markdown'] = markdown
+            
+            return {
+                "status": "success",
+                "result": page
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Confluence get page failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_confluence_list_space(self, params: Dict) -> Dict:
+        """Execute Confluence list space"""
+        try:
+            from integrations import ConfluenceIntegration
+            
+            confluence = ConfluenceIntegration()
+            if not confluence.confluence:
+                return {"status": "error", "error": "Confluence not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            pages = confluence.list_space_pages(
+                space=params.get('space'),
+                limit=params.get('limit', 100)
+            )
+            
+            # Export if requested
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and pages:
+                export_path = confluence.export_pages(pages, output_format=export_format)
+            
+            return {
+                "status": "success",
+                "result": {
+                    "pages": pages,
+                    "count": len(pages),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Confluence list space failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    # === GITHUB INTEGRATION IMPLEMENTATIONS ===
+    def _execute_github_list_prs(self, params: Dict) -> Dict:
+        """Execute GitHub list PRs"""
+        try:
+            from integrations import GitHubIntegration
+            
+            github = GitHubIntegration()
+            if not github.github:
+                return {"status": "error", "error": "GitHub not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            prs = github.list_pull_requests(
+                repo_name=params.get('repo_name'),
+                state=params.get('state', 'all'),
+                author=params.get('author'),
+                label=params.get('label'),
+                limit=params.get('limit', 50)
+            )
+            
+            # Export if requested
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and prs:
+                export_path = github.export_data(prs, output_format=export_format)
+            
+            return {
+                "status": "success",
+                "result": {
+                    "pull_requests": prs,
+                    "count": len(prs),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ GitHub list PRs failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_github_get_pr(self, params: Dict) -> Dict:
+        """Execute GitHub get PR"""
+        try:
+            from integrations import GitHubIntegration
+            
+            github = GitHubIntegration()
+            if not github.github:
+                return {"status": "error", "error": "GitHub not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            pr = github.get_pull_request(
+                repo_name=params.get('repo_name'),
+                pr_number=params.get('pr_number')
+            )
+            
+            if not pr:
+                return {"status": "error", "error": f"PR #{params.get('pr_number')} not found"}
+            
+            return {
+                "status": "success",
+                "result": pr
+            }
+        except Exception as e:
+            console.print(f"[red]❌ GitHub get PR failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_github_search_code(self, params: Dict) -> Dict:
+        """Execute GitHub code search"""
+        try:
+            from integrations import GitHubIntegration
+            
+            github = GitHubIntegration()
+            if not github.github:
+                return {"status": "error", "error": "GitHub not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            results = github.search_code(
+                query=params.get('query'),
+                repo=params.get('repo'),
+                language=params.get('language'),
+                limit=params.get('limit', 50)
+            )
+            
+            return {
+                "status": "success",
+                "result": {
+                    "results": results,
+                    "count": len(results)
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ GitHub code search failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_github_list_issues(self, params: Dict) -> Dict:
+        """Execute GitHub list issues"""
+        try:
+            from integrations import GitHubIntegration
+            
+            github = GitHubIntegration()
+            if not github.github:
+                return {"status": "error", "error": "GitHub not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            issues = github.list_issues(
+                repo_name=params.get('repo_name'),
+                state=params.get('state', 'all'),
+                labels=params.get('labels'),
+                assignee=params.get('assignee'),
+                limit=params.get('limit', 50)
+            )
+            
+            # Export if requested
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and issues:
+                export_path = github.export_data(issues, output_format=export_format)
+            
+            return {
+                "status": "success",
+                "result": {
+                    "issues": issues,
+                    "count": len(issues),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ GitHub list issues failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
     
     def cleanup(self):
         """Cleanup resources"""

@@ -536,6 +536,393 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                 },
                 "required": ["evidence_path"]
             }
+        },
+        
+        # === JIRA INTEGRATION TOOLS ===
+        {
+            "name": "jira_list_tickets",
+            "description": """List and filter Jira tickets.
+            
+            Features:
+            - Filter by project, labels, status, assignee, priority, issue type
+            - Returns ticket summary with key metadata
+            - Can export results to CSV/JSON
+            
+            Use this to:
+            - List all tickets in a project
+            - Find tickets by label (e.g., 'security', 'audit')
+            - Filter by status (e.g., 'Open', 'In Progress', 'Done')
+            - Find tickets assigned to specific person
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project key (e.g., 'AUDIT', 'SEC')"
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by labels (e.g., ['security', 'compliance'])"
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Filter by status (e.g., 'Open', 'In Progress', 'Done')"
+                    },
+                    "assignee": {
+                        "type": "string",
+                        "description": "Filter by assignee username or email"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "description": "Filter by priority (e.g., 'High', 'Critical')"
+                    },
+                    "issue_type": {
+                        "type": "string",
+                        "description": "Filter by issue type (e.g., 'Bug', 'Task', 'Story')"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 50)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format"
+                    }
+                },
+                "required": []
+            }
+        },
+        
+        {
+            "name": "jira_search_jql",
+            "description": """Advanced Jira search using JQL (Jira Query Language).
+            
+            Use this for complex queries like:
+            - 'project = AUDIT AND status = "In Progress" AND priority = High'
+            - 'assignee = currentUser() AND created >= -7d'
+            - 'labels = security AND updated >= -30d ORDER BY created DESC'
+            
+            JQL is more powerful than basic filters.
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "jql_query": {
+                        "type": "string",
+                        "description": "JQL query string (e.g., 'project = AUDIT AND status = Open')"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 100)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format"
+                    }
+                },
+                "required": ["jql_query"]
+            }
+        },
+        
+        {
+            "name": "jira_get_ticket",
+            "description": """Get detailed information about a specific Jira ticket.
+            
+            Returns:
+            - Full description
+            - Comments
+            - Attachments
+            - History
+            - All metadata
+            
+            Use this when you need complete ticket details.
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "ticket_key": {
+                        "type": "string",
+                        "description": "Jira ticket key (e.g., 'AUDIT-123', 'SEC-456')"
+                    }
+                },
+                "required": ["ticket_key"]
+            }
+        },
+        
+        # === CONFLUENCE INTEGRATION TOOLS ===
+        {
+            "name": "confluence_search",
+            "description": """Search Confluence documents by title or content.
+            
+            Features:
+            - Full-text search across all Confluence spaces
+            - Filter by specific space
+            - Returns page metadata and URLs
+            
+            Use this to:
+            - Find documentation about specific topics
+            - Search for procedures, guidelines, policies
+            - Locate audit documentation
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (searches title and content)"
+                    },
+                    "space": {
+                        "type": "string",
+                        "description": "Optional: limit search to specific space key (e.g., 'AUDIT')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 50)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        
+        {
+            "name": "confluence_get_page",
+            "description": """Get full content of a specific Confluence page.
+            
+            Returns:
+            - Page content (HTML)
+            - Metadata (author, version, dates)
+            - Can convert to Markdown
+            
+            Use this to:
+            - Read full documentation
+            - Extract specific procedures
+            - Analyze page content
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "page_id": {
+                        "type": "string",
+                        "description": "Page ID (preferred if known)"
+                    },
+                    "page_title": {
+                        "type": "string",
+                        "description": "Page title (requires space parameter)"
+                    },
+                    "space": {
+                        "type": "string",
+                        "description": "Space key (required if using page_title)"
+                    },
+                    "as_markdown": {
+                        "type": "boolean",
+                        "description": "If true, converts content to Markdown format"
+                    }
+                },
+                "required": []
+            }
+        },
+        
+        {
+            "name": "confluence_list_space",
+            "description": """List all pages in a Confluence space.
+            
+            Use this to:
+            - Get overview of all documentation in a space
+            - Find all audit procedures
+            - Discover available documents
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "space": {
+                        "type": "string",
+                        "description": "Space key (e.g., 'AUDIT', 'SEC', 'DOCS')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of pages (default: 100)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format"
+                    }
+                },
+                "required": ["space"]
+            }
+        },
+        
+        # === GITHUB INTEGRATION TOOLS ===
+        {
+            "name": "github_list_prs",
+            "description": """List pull requests from a GitHub repository.
+            
+            Features:
+            - Filter by state (open, closed, all)
+            - Filter by author
+            - Filter by label
+            - Returns PR metadata and stats
+            
+            Use this to:
+            - Review recent code changes
+            - Find PRs by specific author
+            - Analyze PR patterns
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "Repository name (e.g., 'org/repo' or 'user/repo')"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": ["open", "closed", "all"],
+                        "description": "PR state filter (default: 'all')"
+                    },
+                    "author": {
+                        "type": "string",
+                        "description": "Filter by author username"
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Filter by label"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of PRs (default: 50)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format"
+                    }
+                },
+                "required": ["repo_name"]
+            }
+        },
+        
+        {
+            "name": "github_get_pr",
+            "description": """Get detailed information about a specific pull request.
+            
+            Returns:
+            - Full PR description
+            - Comments and reviews
+            - Commit details
+            - Files changed
+            - Merge status
+            
+            Use this for detailed PR analysis.
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "Repository name (e.g., 'org/repo')"
+                    },
+                    "pr_number": {
+                        "type": "integer",
+                        "description": "PR number"
+                    }
+                },
+                "required": ["repo_name", "pr_number"]
+            }
+        },
+        
+        {
+            "name": "github_search_code",
+            "description": """Search code across GitHub repositories.
+            
+            Use this to:
+            - Find specific code patterns
+            - Locate function implementations
+            - Search for security patterns
+            - Analyze code usage
+            
+            Can filter by repository and language.
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Code search query (e.g., 'def authenticate', 'class Config')"
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "Limit to specific repository (e.g., 'org/repo')"
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Limit to specific language (e.g., 'python', 'javascript')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of results (default: 50)"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        
+        {
+            "name": "github_list_issues",
+            "description": """List issues from a GitHub repository.
+            
+            Features:
+            - Filter by state, labels, assignee
+            - Returns issue metadata
+            - Can export to CSV/JSON
+            
+            Use this to:
+            - Track open issues
+            - Find bugs by label
+            - Analyze issue patterns
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "Repository name (e.g., 'org/repo')"
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": ["open", "closed", "all"],
+                        "description": "Issue state filter (default: 'all')"
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by labels (e.g., ['bug', 'enhancement'])"
+                    },
+                    "assignee": {
+                        "type": "string",
+                        "description": "Filter by assignee username"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of issues (default: 50)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format"
+                    }
+                },
+                "required": ["repo_name"]
+            }
         }
     ]
     
