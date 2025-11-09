@@ -977,5 +977,6 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
 
 
 # Export TOOLS constant for convenience
-TOOLS = get_tool_definitions()
+# 🔓 SELF-HEALING ENABLED: Agent can now fix code autonomously!
+TOOLS = get_tool_definitions(read_only_mode=False)
 
