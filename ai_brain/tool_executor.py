@@ -492,14 +492,31 @@ class ToolExecutor:
                             # NEW: Navigate to specific section if specified
                             if section_name:
                                 console.print(f"[cyan]🧭 Navigating to section: '{section_name}'...[/cyan]")
-                                if not universal_nav.navigate_to_section(
+                                section_success = universal_nav.navigate_to_section(
                                     section_name=section_name,
                                     click_first_resource=select_first_resource,
                                     resource_name=resource_name,
                                     resource_index=resource_index
-                                ):
+                                )
+                                
+                                if section_success:
+                                    console.print(f"[green]✅ Navigated to section: {section_name}[/green]")
+                                    time.sleep(3)  # Extra wait for section content to load
+                                else:
                                     console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
-                                    # Continue anyway - maybe we're already there
+                                    console.print(f"[yellow]   Current URL: {browser.driver.current_url}[/yellow]")
+                                    
+                                    # Verify we're still on the service (not back on homepage)
+                                    current_url = browser.driver.current_url
+                                    if '/console/home' in current_url or service.lower() not in current_url.lower():
+                                        console.print(f"[red]❌ Navigated away from {service}! Attempting to recover...[/red]")
+                                        # Try to navigate back to the service
+                                        if not universal_nav.navigate_to_service(service, use_search=True):
+                                            return {
+                                                "status": "error",
+                                                "error": f"Lost navigation to {service} and could not recover"
+                                            }
+                                        time.sleep(2)
                         else:
                             console.print(f"[red]❌ Universal navigator not available[/red]")
                             return {
