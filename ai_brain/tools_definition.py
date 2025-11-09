@@ -111,8 +111,66 @@ Use this after downloading evidence locally or when SharePoint metadata includes
         },
 
         {
+            "name": "aws_navigate",
+            "description": """🧭 NAVIGATION ONLY - Navigate to AWS Console pages WITHOUT taking screenshots.
+            
+            ⚠️  USE THIS TOOL WHEN:
+            - User says "go to", "navigate to", "open", "login to" AWS service
+            - User wants to browse AWS console
+            - User wants to check if they're in the right place
+            - User does NOT explicitly ask for screenshot/capture/evidence
+            
+            ❌ DO NOT USE THIS TOOL IF:
+            - User explicitly asks for "screenshot", "capture", "take a picture", "save evidence"
+            - User asks to "collect evidence" or "document"
+            → Use aws_take_screenshot instead
+            
+            This tool:
+            - Opens AWS Console in browser
+            - Authenticates with duo-sso if needed (prompts user for MFA)
+            - Navigates to specified service/section
+            - Keeps browser open for further commands
+            - Does NOT capture screenshots
+            
+            Supports ALL AWS services: RDS, S3, IAM, EC2, VPC, CloudWatch, Bedrock, Lambda, etc.
+            """,
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "service": {
+                        "type": "string",
+                        "description": "AWS service name (e.g., 'bedrock', 's3', 'rds', 'iam', 'ec2', 'lambda')"
+                    },
+                    "aws_account": {
+                        "type": "string",
+                        "description": "AWS account name (e.g., 'ctr-prod', 'ctr-int', 'xdr-prod')"
+                    },
+                    "aws_region": {
+                        "type": "string",
+                        "description": "AWS region (e.g., 'us-east-1', 'us-west-2', 'eu-west-1')"
+                    },
+                    "section_name": {
+                        "type": "string",
+                        "description": "Optional: Specific section within service (e.g., 'Custom Domain Names', 'Snapshots')"
+                    }
+                },
+                "required": ["service", "aws_account", "aws_region"]
+            }
+        },
+
+        {
             "name": "aws_take_screenshot",
-            "description": """Takes screenshots of AWS Console pages with timestamps.
+            "description": """📸 SCREENSHOT & EVIDENCE - Navigate to AWS Console AND capture screenshot.
+            
+            ⚠️  USE THIS TOOL WHEN:
+            - User explicitly asks for "screenshot", "capture", "take a picture", "save evidence"
+            - User says "collect evidence", "document this", "take a snapshot"
+            - User wants to save proof/evidence of AWS resources
+            
+            ❌ DO NOT USE THIS TOOL IF:
+            - User only says "go to", "navigate to", "open" (no screenshot requested)
+            - User just wants to browse/check AWS console
+            → Use aws_navigate instead
             
             This tool:
             - Opens AWS Console in browser
