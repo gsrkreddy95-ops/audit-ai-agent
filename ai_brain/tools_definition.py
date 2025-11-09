@@ -201,6 +201,30 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                         "type": "integer",
                         "description": "Index of resource to select (0 = first, 1 = second, etc.). Only used if select_first_resource is true and resource_name is not provided. Default: 0"
                     },
+                    "capture_all_pages": {
+                        "type": "boolean",
+                        "description": """🔄 PAGINATION SUPPORT (NEW!): Automatically capture ALL pages if the service displays paginated results.
+                        
+                        When enabled:
+                        - Detects pagination controls (1, 2, 3, Next, Load More, etc.)
+                        - Automatically clicks through ALL pages
+                        - Takes a screenshot of EACH page
+                        - Counts total items captured
+                        - Works for ALL AWS services (KMS keys, Secrets Manager secrets, S3 buckets, RDS instances, etc.)
+                        
+                        Examples:
+                        - KMS has 20 keys across 2 pages → captures both pages
+                        - Secrets Manager has 80 secrets across 8 pages → captures all 8
+                        - S3 has 300 buckets → captures all pages automatically
+                        
+                        Set to true when user asks for "all" items, "complete list", or when pagination indicators are visible.
+                        Default: false (captures only first page)
+                        """
+                    },
+                    "max_pages": {
+                        "type": "integer",
+                        "description": "Safety limit for pagination. Maximum number of pages to capture. Default: 50. Use higher values (e.g., 100) if user explicitly requests it."
+                    },
                     "aws_account": {
                         "type": "string",
                         "description": "AWS PRODUCTION account profile name (REQUIRED - must ask user to confirm!). For audit evidence, use production accounts only: ctr-prod, sxo101, sxo202. DO NOT use ctr-int or ctr-test for audit evidence."

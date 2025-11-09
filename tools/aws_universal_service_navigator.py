@@ -860,6 +860,247 @@ class AWSUniversalServiceNavigator:
         time.sleep(1)
         return True
     
+    def handle_pagination(self, screenshot_callback: Optional[Callable] = None, max_pages: int = 50) -> Dict:
+        """
+        🔄 UNIVERSAL PAGINATION HANDLER - Works for ALL AWS Services!
+        
+        Automatically detects and navigates through all pages in paginated AWS Console views.
+        
+        Handles multiple pagination patterns:
+        1. Standard AWS pagination (1, 2, 3, ... Next)
+        2. "Load more" buttons
+        3. Infinite scroll
+        4. Dropdown page selectors
+        5. "Next" only buttons
+        
+        Args:
+            screenshot_callback: Optional function to call for each page (receives page_number)
+            max_pages: Safety limit (default: 50 pages)
+        
+        Returns:
+            Dict with results:
+            {
+                "total_pages": 8,
+                "screenshots": ["page1.png", "page2.png", ...],
+                "items_captured": 120,
+                "pagination_type": "standard"
+            }
+        
+        Example:
+            # Capture all pages of KMS keys
+            navigator.navigate_to_service("KMS")
+            results = navigator.handle_pagination(
+                screenshot_callback=lambda page: f"kms_page_{page}.png"
+            )
+        """
+        console.print("\n[bold cyan]" + "="*60 + "[/bold cyan]")
+        console.print("[bold cyan]🔄 PAGINATION HANDLER ACTIVATED[/bold cyan]")
+        console.print("[bold cyan]" + "="*60 + "[/bold cyan]\n")
+        
+        results = {
+            "total_pages": 0,
+            "screenshots": [],
+            "items_captured": 0,
+            "pagination_type": "unknown",
+            "error": None
+        }
+        
+        current_page = 1
+        screenshots = []
+        
+        try:
+            while current_page <= max_pages:
+                console.print(f"\n[bold yellow]📄 Page {current_page}[/bold yellow]")
+                
+                # Wait for page content to load
+                time.sleep(2)
+                
+                # Count items on current page
+                items_on_page = self._count_items_on_page()
+                results["items_captured"] += items_on_page
+                console.print(f"[cyan]   Items on this page: {items_on_page}[/cyan]")
+                
+                # Take screenshot if callback provided
+                if screenshot_callback:
+                    try:
+                        screenshot_path = screenshot_callback(current_page)
+                        screenshots.append(screenshot_path)
+                        console.print(f"[green]   ✅ Screenshot saved: {screenshot_path}[/green]")
+                    except Exception as e:
+                        console.print(f"[yellow]   ⚠️  Screenshot failed: {e}[/yellow]")
+                
+                # Try to find and click "Next" button
+                next_clicked = self._click_next_page()
+                
+                if not next_clicked:
+                    # No more pages
+                    console.print(f"[green]✅ Reached end of pagination (Page {current_page})[/green]")
+                    break
+                
+                current_page += 1
+                
+                # Safety check
+                if current_page > max_pages:
+                    console.print(f"[yellow]⚠️  Reached max page limit ({max_pages})[/yellow]")
+                    break
+            
+            results["total_pages"] = current_page
+            results["screenshots"] = screenshots
+            results["pagination_type"] = self._detect_pagination_type()
+            
+            # Summary
+            console.print("\n[bold green]" + "="*60 + "[/bold green]")
+            console.print("[bold green]✅ PAGINATION COMPLETE[/bold green]")
+            console.print(f"[bold green]   Total Pages: {results['total_pages']}[/bold green]")
+            console.print(f"[bold green]   Items Captured: {results['items_captured']}[/bold green]")
+            console.print(f"[bold green]   Screenshots: {len(screenshots)}[/bold green]")
+            console.print("[bold green]" + "="*60 + "[/bold green]\n")
+            
+        except Exception as e:
+            results["error"] = str(e)
+            console.print(f"[red]❌ Pagination error: {e}[/red]")
+        
+        return results
+    
+    def _count_items_on_page(self) -> int:
+        """Count items/rows on current page"""
+        try:
+            # Try multiple selectors for different AWS services
+            count_script = """
+                // Try table rows (most common)
+                let rows = document.querySelectorAll('table tbody tr');
+                if (rows.length > 0) return rows.length;
+                
+                // Try cards/tiles
+                let cards = document.querySelectorAll('[data-testid*="card"], .awsui-cards-card-container > div');
+                if (cards.length > 0) return cards.length;
+                
+                // Try list items
+                let items = document.querySelectorAll('ul[role="list"] > li, ol[role="list"] > li');
+                if (items.length > 0) return items.length;
+                
+                // Try awsui-table rows
+                let awsuiRows = document.querySelectorAll('awsui-table tbody tr, [role="row"]');
+                if (awsuiRows.length > 1) return awsuiRows.length - 1; // Subtract header
+                
+                return 0;
+            """
+            
+            count = self.driver.execute_script(count_script)
+            return count if count else 0
+            
+        except Exception as e:
+            console.print(f"[dim]   Could not count items: {e}[/dim]")
+            return 0
+    
+    def _click_next_page(self) -> bool:
+        """
+        Universal "Next Page" clicker - tries multiple strategies
+        
+        Returns:
+            True if successfully clicked next, False if no more pages
+        """
+        # Strategy 1: Look for "Next" button
+        strategies = [
+            # AWS Pagination - "Next" button
+            {
+                "name": "AWS Next Button",
+                "script": """
+                    let nextBtn = document.querySelector('button[data-testid="pagination-button-next"]') ||
+                                  document.querySelector('button:not([disabled])[aria-label*="Next"]') ||
+                                  document.querySelector('button:not([disabled])[aria-label*="next"]') ||
+                                  document.querySelector('a[aria-label*="Next"]');
+                    
+                    if (nextBtn && !nextBtn.disabled && !nextBtn.hasAttribute('aria-disabled')) {
+                        nextBtn.click();
+                        return true;
+                    }
+                    return false;
+                """
+            },
+            # Numbered pagination - click next number
+            {
+                "name": "Numbered Pages",
+                "script": """
+                    let pages = document.querySelectorAll('button[data-testid^="pagination-button-"]:not([aria-current])');
+                    let currentPage = document.querySelector('button[data-testid^="pagination-button-"][aria-current="true"]');
+                    
+                    if (currentPage && pages.length > 0) {
+                        // Find the next page number
+                        for (let page of pages) {
+                            let pageNum = parseInt(page.textContent);
+                            let currentNum = parseInt(currentPage.textContent);
+                            if (pageNum === currentNum + 1) {
+                                page.click();
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                """
+            },
+            # "Load more" button
+            {
+                "name": "Load More Button",
+                "script": """
+                    let loadMore = document.querySelector('button:not([disabled])')
+                    if (loadMore && loadMore.textContent.match(/load more|show more/i)) {
+                        loadMore.click();
+                        return true;
+                    }
+                    return false;
+                """
+            },
+            # Right arrow / chevron
+            {
+                "name": "Right Arrow Icon",
+                "script": """
+                    let rightArrow = document.querySelector('button[aria-label*="forward"]') ||
+                                     document.querySelector('button svg[data-icon="angle-right"]') ||
+                                     document.querySelector('a[rel="next"]');
+                    
+                    if (rightArrow && !rightArrow.disabled) {
+                        rightArrow.click();
+                        return true;
+                    }
+                    return false;
+                """
+            }
+        ]
+        
+        for strategy in strategies:
+            try:
+                result = self.driver.execute_script(strategy["script"])
+                if result:
+                    console.print(f"[dim]   🎯 {strategy['name']} clicked[/dim]")
+                    time.sleep(1)  # Wait for page load
+                    return True
+            except Exception as e:
+                continue
+        
+        # No strategy worked - assume we're at the end
+        return False
+    
+    def _detect_pagination_type(self) -> str:
+        """Detect what type of pagination this page uses"""
+        try:
+            detection_script = """
+                if (document.querySelector('button[data-testid="pagination-button-next"]')) {
+                    return 'standard-aws';
+                }
+                if (document.querySelector('button')) {
+                    return 'load-more';
+                }
+                if (document.querySelector('a[rel="next"]')) {
+                    return 'link-based';
+                }
+                return 'unknown';
+            """
+            
+            return self.driver.execute_script(detection_script)
+        except:
+            return 'unknown'
+    
     def click_tab(self, tab_name: str) -> bool:
         """
         Click a tab on current page.

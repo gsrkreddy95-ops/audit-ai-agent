@@ -374,6 +374,8 @@ class ToolExecutor:
             section_name = params.get('section_name', '')
             select_first_resource = params.get('select_first_resource', False)
             resource_index = params.get('resource_index', 0)
+            capture_all_pages = params.get('capture_all_pages', False)  # 🔄 PAGINATION
+            max_pages = params.get('max_pages', 50)  # 🔄 PAGINATION
             
             # Decode HTML entities (e.g., &amp; -> &)
             if config_tab:
@@ -549,7 +551,68 @@ class ToolExecutor:
                         else:
                             console.print(f"[yellow]⚠️  Tab '{config_tab}' not found, capturing current view[/yellow]")
 
-                    # Final screenshot
+                    # 🔄 PAGINATION HANDLING (NEW!)
+                    if capture_all_pages:
+                        console.print(f"\n[bold yellow]🔄 PAGINATION MODE ENABLED[/bold yellow]")
+                        console.print(f"[yellow]   Will capture ALL pages (max: {max_pages})[/yellow]\n")
+                        
+                        # Get universal navigator for pagination
+                        universal_nav = BrowserSessionManager.get_universal_navigator()
+                        if universal_nav:
+                            # Create screenshot callback for pagination
+                            page_screenshots = []
+                            
+                            def pagination_screenshot_callback(page_num):
+                                """Callback function for each page screenshot"""
+                                page_filename = filename.replace('.png', f'_page{page_num}.png')
+                                page_path = browser.capture_screenshot(name=page_filename.replace('.png', ''))
+                                
+                                if page_path and os.path.exists(page_path):
+                                    # Read and save to evidence manager
+                                    with open(page_path, 'rb') as f:
+                                        file_content = f.read()
+                                    
+                                    # Save to evidence folder
+                                    success, final_path, message = self.evidence_manager.save_evidence(
+                                        file_content=file_content,
+                                        file_name=page_filename,
+                                        rfi_code=rfi_code
+                                    )
+                                    
+                                    if success and final_path:
+                                        page_screenshots.append(final_path)
+                                        return final_path
+                                
+                                return None
+                            
+                            # Handle pagination
+                            pagination_results = universal_nav.handle_pagination(
+                                screenshot_callback=pagination_screenshot_callback,
+                                max_pages=max_pages
+                            )
+                            
+                            # Return pagination results
+                            if pagination_results.get('screenshots'):
+                                console.print(f"\n[bold green]✅ PAGINATION COMPLETE![/bold green]")
+                                console.print(f"[green]   Total Pages: {pagination_results['total_pages']}[/green]")
+                                console.print(f"[green]   Screenshots: {len(pagination_results['screenshots'])}[/green]")
+                                console.print(f"[green]   Items: {pagination_results['items_captured']}[/green]\n")
+                                
+                                return {
+                                    "status": "success",
+                                    "message": f"Captured {pagination_results['total_pages']} pages with {pagination_results['items_captured']} items",
+                                    "screenshots": pagination_results['screenshots'],
+                                    "total_pages": pagination_results['total_pages'],
+                                    "items_captured": pagination_results['items_captured'],
+                                    "pagination_type": pagination_results['pagination_type'],
+                                    "service": service,
+                                    "account": account,
+                                    "region": region
+                                }
+                        else:
+                            console.print(f"[yellow]⚠️  Pagination requested but navigator unavailable, capturing single page[/yellow]")
+
+                    # Final screenshot (single page mode)
                     screenshot_path = browser.capture_screenshot(name=filename.replace('.png',''))
                 
                 # Verify screenshot was captured
