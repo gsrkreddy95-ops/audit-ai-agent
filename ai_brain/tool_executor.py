@@ -655,6 +655,37 @@ class ToolExecutor:
                 if screenshot_path and os.path.exists(screenshot_path):
                     console.print(f"[green]✅ Screenshot captured (temp): {screenshot_path}[/green]")
                     
+                    # 🔍 SELF-VALIDATION (NEW!)
+                    console.print(f"\n[bold yellow]🔍 Validating evidence quality...[/bold yellow]")
+                    from tools.evidence_validator import EvidenceValidator
+                    
+                    validator = EvidenceValidator(driver=browser.driver)
+                    validation_result = validator.validate_screenshot_evidence(
+                        screenshot_path=screenshot_path,
+                        expected_service=service,
+                        expected_content=None,  # Optional: can add expected text
+                        current_url=browser.driver.current_url
+                    )
+                    
+                    # If validation fails, suggest retry
+                    if not validation_result["valid"]:
+                        console.print(f"\n[bold red]⚠️  EVIDENCE QUALITY ISSUE DETECTED![/bold red]")
+                        console.print(f"[red]   Confidence: {validation_result['confidence']*100:.0f}%[/red]")
+                        console.print(f"[red]   Issues: {len(validation_result['issues'])}[/red]\n")
+                        
+                        # Get retry suggestions
+                        retry_strategy = validator.suggest_retry_strategy(validation_result, service)
+                        
+                        if retry_strategy["should_retry"]:
+                            console.print(f"[yellow]💡 Retry Strategy: {retry_strategy['strategy']}[/yellow]")
+                            console.print(f"[yellow]   Should we retry with improved parameters? (Agent will decide)[/yellow]\n")
+                            
+                            # Agent can decide to retry automatically here
+                            # For now, continue with warning
+                            console.print(f"[yellow]⚠️  Proceeding with current screenshot, but quality may be compromised[/yellow]\n")
+                    else:
+                        console.print(f"\n[bold green]✅ EVIDENCE VALIDATED (Confidence: {validation_result['confidence']*100:.0f}%)[/bold green]\n")
+                    
                     # Read and save to evidence manager
                     with open(screenshot_path, 'rb') as f:
                         file_content = f.read()
@@ -691,7 +722,15 @@ class ToolExecutor:
                             "temp_path": screenshot_path,
                             "final_path": final_path,
                             "navigator_type": "RDS Enhanced" if service.lower() == 'rds' else "Universal Enhanced",
-                            "self_healing_used": True
+                            "self_healing_used": True,
+                            # 🔍 VALIDATION RESULTS (NEW!)
+                            "validation": {
+                                "performed": True,
+                                "valid": validation_result.get("valid", False),
+                                "confidence": validation_result.get("confidence", 0.0),
+                                "issues": validation_result.get("issues", []),
+                                "checks": validation_result.get("checks", {})
+                            }
                         }
                     }
                 else:
