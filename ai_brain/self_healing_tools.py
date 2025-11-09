@@ -418,7 +418,11 @@ def diagnose_error_context(error_message: str, tool_name: str, parameters: Dict[
 
 
 def fix_tool_code_with_validation(tool_name: str, issue: str, old_code: str, new_code: str) -> Dict[str, Any]:
-    """Fix a bug in tool code with validation"""
+    """Fix a bug in tool code with validation AND Git tracking"""
+    from ai_brain.self_healing_git_tracker import get_tracker
+    
+    tracker = get_tracker()
+    
     try:
         if tool_name not in TOOL_SOURCE_MAP:
             return {
@@ -453,15 +457,39 @@ def fix_tool_code_with_validation(tool_name: str, issue: str, old_code: str, new
         console.print(f"[yellow]📝 Issue: {issue}[/yellow]")
         console.print(f"[cyan]📁 File: {source_file}[/cyan]")
         
+        # 🆕 COMMIT THE FIX TO GIT
+        fix_details = {
+            "file": str(source_file),
+            "old_code": old_code[:200],  # Truncate for log
+            "new_code": new_code[:200],
+            "test_result": "pending"
+        }
+        
+        git_committed = tracker.commit_fix(
+            tool_name=tool_name,
+            issue=issue,
+            files_changed=[str(source_file)],
+            fix_details=fix_details
+        )
+        
         return {
             "status": "success",
             "message": f"Successfully fixed {tool_name}",
             "issue": issue,
             "file": str(source_file),
+            "git_committed": git_committed,
             "next_step": f"Use test_tool(tool_name='{tool_name}') to verify the fix"
         }
         
     except Exception as e:
+        # Log the failure
+        tracker._log_fix_attempt(
+            tool_name=tool_name,
+            issue=issue,
+            details={},
+            success=False,
+            error=str(e)
+        )
         return {
             "status": "error",
             "error": str(e),
