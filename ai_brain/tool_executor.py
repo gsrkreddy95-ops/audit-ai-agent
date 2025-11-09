@@ -391,14 +391,16 @@ class ToolExecutor:
         
         try:
             # Authenticate to AWS account using BrowserSessionManager
-            if not BrowserSessionManager.authenticate_aws(account):
+            # Note: authenticate_aws takes region as second parameter
+            if not BrowserSessionManager.authenticate_aws(account, region):
                 return {
                     "status": "error",
                     "error": f"Failed to authenticate to AWS account: {account}"
                 }
             
-            # Change region if needed
-            current_region = BrowserSessionManager.get_current_region()
+            # Check current region and change if needed
+            # Note: _current_region is a private class variable, but we can access it
+            current_region = BrowserSessionManager._current_region
             if current_region and current_region != region:
                 console.print(f"[cyan]🌍 Switching region: {current_region} → {region}[/cyan]")
                 if not BrowserSessionManager.change_region(region):
