@@ -1,23 +1,373 @@
-# 🔍 Evidence Validation & Self-Review System
+# 🔍 Universal Output Validation & Self-Review System
 
 ## 🎯 Problem Solved
 
 **Your Concern:**
-> "Sometimes the agent says 'I have successfully collected the evidence', but when I see in reality the evidence is not accurate. For example, in case of API Gateway screenshot, it didn't actually navigate to API Gateway console but said it took screenshot."
+> "I want this agent to be capable of reviewing the collected evidence or output for my requests in chat. Sometimes it says 'I have successfully collected the evidence', but when I see in reality the evidence is not accurate. **Not just for KMS keys, for ALL things done by agent - for everything regarding AWS, Jira, Confluence, etc., for everything it should verify if something is inaccurate after reviewing.**"
 
-**Solution:** Agent now **validates its own outputs** before claiming success!
+**Solution:** Agent now **validates ALL outputs from ALL tools** before claiming success!
 
 ---
 
 ## ✅ What Was Implemented
 
-### **Evidence Validator** (`tools/evidence_validator.py`)
-A comprehensive validation system that performs **5 critical checks:**
+### **1. Evidence Validator** (`tools/evidence_validator.py`)
+Validates **AWS screenshots** specifically with false positive detection.
+
+### **2. Universal Output Validator** (`tools/universal_output_validator.py`) - **NEW!**
+Validates **ALL tool outputs** across **ALL services:**
+
+#### **AWS Tools:**
+- ✅ Screenshots (KMS, S3, RDS, EC2, Lambda, API Gateway, etc.)
+- ✅ Data Exports (IAM users, S3 buckets, RDS instances, CSV/JSON/XLSX)
+
+#### **Jira Tools:**
+- ✅ `jira_list_tickets` - Validates ticket list completeness
+- ✅ `jira_search_jql` - Validates JQL query results
+- ✅ `jira_get_ticket` - Validates ticket data structure
+
+#### **Confluence Tools:**
+- ✅ `confluence_search` - Validates search results
+- ✅ `confluence_get_page` - Validates page content
+- ✅ `confluence_list_space` - Validates space pages
+
+#### **GitHub Tools:**
+- ✅ `github_list_prs` - Validates PR list
+- ✅ `github_get_pr` - Validates PR details
+- ✅ `github_search_code` - Validates code search results
+- ✅ `github_list_issues` - Validates issue list
+
+#### **Generic Tools:**
+- ✅ Any other tool - Basic validation (output exists, no errors, has content)
+
+---
+
+## 🔍 Validation Types
+
+### **AWS Screenshot Validation:**
 
 1. **✅ File Exists** - Screenshot file was actually created
 2. **✅ Image Valid** - Image is not blank, corrupted, or too small
 3. **✅ URL Correct** - Browser is on the expected service page
 4. **✅ Not False Positive** - Not on console home, recently visited, etc.
+5. **✅ Content Present** - Expected elements/text are visible (optional)
+
+---
+
+### **AWS Export Validation:**
+
+1. **✅ File Created** - Export file exists
+2. **✅ File Not Empty** - File size > 100 bytes
+3. **✅ Has Data** - Row count > 0 (not empty results)
+
+**Example:**
+```
+🔍 Validating AWS export...
+✅ File exists: iam_users_export.csv
+✅ File size: 15234 bytes
+✅ Exported 47 rows
+
+✅ Export validated (Confidence: 100%)
+```
+
+---
+
+### **Jira Validation:**
+
+1. **✅ No API Errors** - API call succeeded
+2. **✅ Has Data** - Returned tickets/results
+3. **✅ Structure Valid** - Required fields present (key, summary, etc.)
+
+**Example:**
+```
+🔍 Validating Jira output...
+✅ No errors reported
+❌ Empty results (0 tickets)
+
+❌ Jira validation failed (Confidence: 33%)
+   Issues: Empty results (0 tickets)
+
+🔍 Diagnosis:
+   Jira query returned no tickets
+
+💡 Suggested Fix:
+   Check JQL query, filters, project, and date range
+```
+
+---
+
+### **Confluence Validation:**
+
+1. **✅ No API Errors** - API call succeeded
+2. **✅ Has Data** - Returned pages/results
+
+**Example:**
+```
+🔍 Validating Confluence output...
+✅ No errors reported
+✅ Retrieved 15 items
+
+✅ Confluence output validated
+```
+
+---
+
+### **GitHub Validation:**
+
+1. **✅ No API Errors** - API call succeeded
+2. **✅ Has Data** - Returned PRs/issues/results
+
+**Example:**
+```
+🔍 Validating GitHub output...
+✅ No errors reported
+✅ Retrieved 8 items
+
+✅ GitHub output validated
+```
+
+---
+
+### **Generic Tool Validation:**
+
+1. **✅ Output Exists** - Tool returned something (not None)
+2. **✅ No Error Status** - No "status": "error" in response
+3. **✅ Has Content** - Output is not empty
+
+---
+
+## 📊 Example Outputs
+
+### **Example 1: Jira Query Returns No Results**
+
+```
+You: List all Jira tickets with label "audit-2025"
+
+Agent:
+🔧 Executing jira_list_tickets...
+🔍 Validating tool output...
+
+🔍 VALIDATING JIRA_LIST_TICKETS OUTPUT
+
+🔍 Validating Jira output...
+✅ No errors reported
+❌ Empty results (0 tickets)
+
+📊 VALIDATION SUMMARY:
+   Confidence: 33%
+   Checks Passed: 1/3
+
+❌ Jira validation failed (Confidence: 33%)
+
+⚠️  OUTPUT VALIDATION FAILED!
+   Confidence: 33%
+   Issues: ['Empty results (0 tickets)']
+
+🔍 Diagnosis:
+   Jira query returned no tickets
+
+💡 Suggested Fix:
+   Check JQL query, filters, project, and date range
+
+⚠️  Step marked as 'needs_attention'
+```
+
+**What Agent Reports to You:**
+"⚠️  I found 0 Jira tickets with label 'audit-2025'. This might be because:
+- The label doesn't exist
+- No tickets have this label
+- Permissions issue
+
+Would you like me to:
+1. Check if the label exists in Jira?
+2. Try a different query?"
+
+---
+
+### **Example 2: AWS Export Has No Data**
+
+```
+You: Export all IAM users to CSV
+
+Agent:
+🔧 Executing aws_export_data...
+🔍 Validating tool output...
+
+🔍 VALIDATING AWS_EXPORT_DATA OUTPUT
+
+Validating AWS export...
+✅ File exists: iam_users_20251109.csv
+✅ File size: 45 bytes
+⚠️  No data exported (0 rows)
+
+📊 VALIDATION SUMMARY:
+   Confidence: 67%
+   Checks Passed: 2/3
+
+❌ Export validation failed (Confidence: 67%)
+
+⚠️  OUTPUT VALIDATION FAILED!
+   Confidence: 67%
+   Issues: ['No data exported (0 rows)']
+
+🔍 Diagnosis:
+   Query returned no results
+
+💡 Suggested Fix:
+   Check filters, date ranges, and account/region
+```
+
+**What Agent Reports to You:**
+"⚠️  The IAM export completed but contains 0 users. This could mean:
+- The account has no IAM users (unlikely)
+- Permissions issue (can't list users)
+- Wrong account/region
+
+Would you like me to:
+1. Verify we're in the correct account?
+2. Check IAM permissions?"
+
+---
+
+### **Example 3: API Gateway Screenshot (Success)**
+
+```
+You: Navigate to API Gateway and take screenshot
+
+Agent:
+🔧 Executing aws_take_screenshot...
+📸 Screenshot captured
+🔍 Validating evidence quality...
+
+🔍 VALIDATING EVIDENCE
+📸 Screenshot: apigateway_us-east-1.png
+🎯 Expected Service: APIGATEWAY
+
+✅ File exists
+✅ Image valid: 1920x1080 pixels
+✅ URL matches service: apigateway
+✅ Not a false positive
+
+📊 VALIDATION SUMMARY:
+   Confidence: 100%
+   Checks Passed: 4/4
+
+✅ EVIDENCE VALIDATED (Confidence: 100%)
+
+✅ Output validated (Confidence: 100%)
+```
+
+**What Agent Reports to You:**
+"✅ Screenshot captured successfully from API Gateway console (Validated: 100% confidence)"
+
+---
+
+## 🎯 Integration with Orchestrator
+
+Every tool call is now automatically validated:
+
+```python
+# In AIOrchestrator.execute_plan()
+result = self.tool_executor.execute_tool(tool_name, parameters)
+
+# 🔍 AUTOMATIC VALIDATION
+validation_result = self.output_validator.validate_tool_output(
+    tool_name=tool_name,
+    tool_parameters=parameters,
+    tool_output=result
+)
+
+# Add validation to result
+result["validation"] = validation_result
+
+# Check if valid
+if not validation_result["valid"]:
+    # Mark step as needs attention
+    step.status = 'needs_attention'
+    
+    # Show diagnosis and fix
+    print(f"Diagnosis: {validation_result['diagnosis']}")
+    print(f"Fix: {validation_result['suggested_fix']}")
+```
+
+---
+
+## 📈 Validation Summary
+
+At the end of a session, you can see overall validation stats:
+
+```
+📊 VALIDATION SUMMARY
+   Total Tool Calls: 25
+   Validated: 25
+   
+   Valid: 23 (92%)
+   Invalid: 2 (8%)
+   
+   Average Confidence: 94%
+   
+   Issues Detected:
+   - Jira: Empty results (1)
+   - AWS Export: No data (1)
+   
+   All issues diagnosed with fix suggestions provided.
+```
+
+---
+
+## ✅ What This Means For You
+
+### **Before:**
+```
+Agent: "Successfully listed Jira tickets"
+Reality: 0 tickets found
+User: "There should be 50 tickets! What happened?"
+```
+
+### **After:**
+```
+Agent: "🔍 Validating Jira output..."
+Agent: "❌ Validation failed - 0 tickets found"
+Agent: "🔍 Diagnosis: Query returned no results"
+Agent: "💡 Fix: Check JQL query and filters"
+Agent: "⚠️  I found 0 tickets. This might be because..."
+User: ✅ "Thanks for catching that!"
+```
+
+---
+
+## 🚀 Benefits
+
+| Benefit | Description |
+|---------|-------------|
+| **Transparency** | You know when something went wrong |
+| **Diagnosis** | Agent explains what happened |
+| **Fix Suggestions** | Agent suggests how to correct it |
+| **Confidence Scores** | You know how reliable the output is |
+| **Prevents False Positives** | No more "success" when it actually failed |
+| **Universal** | Works for ALL tools (AWS, Jira, Confluence, GitHub) |
+
+---
+
+## 🎯 Final Confirmation
+
+### **Q:** Does the agent validate ALL outputs (AWS, Jira, Confluence, etc.)?
+
+### **A:** **YES!** ✅
+
+**The agent now validates:**
+1. ✅ **AWS Screenshots** - False positive detection, URL validation
+2. ✅ **AWS Exports** - File exists, not empty, has data
+3. ✅ **Jira Tools** - API success, data present, structure valid
+4. ✅ **Confluence Tools** - API success, data present
+5. ✅ **GitHub Tools** - API success, data present
+6. ✅ **Any Other Tool** - Generic validation
+
+**Every tool call is validated before reporting success!**
+
+---
+
+**Your agent is now self-aware across ALL tools and services!** 🧠✅🔍
 5. **✅ Content Present** - Expected elements/text are visible (optional)
 
 ---
