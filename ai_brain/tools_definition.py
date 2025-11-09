@@ -225,6 +225,75 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                         "type": "integer",
                         "description": "Safety limit for pagination. Maximum number of pages to capture. Default: 50. Use higher values (e.g., 100) if user explicitly requests it."
                     },
+                    "filter_by_date": {
+                        "type": "boolean",
+                        "description": """📅 DATE FILTERING (NEW!): Filter resources by audit period or date range.
+                        
+                        CRITICAL FOR AUDIT COMPLIANCE:
+                        Audits typically cover a specific time period (e.g., FY2025: Jan 1 - Dec 31, 2025).
+                        Only resources created/modified during that period should be captured.
+                        
+                        When enabled:
+                        - Filters resources by creation date, modification date, or other date columns
+                        - Hides resources outside the audit period
+                        - Highlights resources within the audit period (green background)
+                        - Shows "X out of Y resources" in the screenshot
+                        - Works for ALL AWS services (KMS, Secrets Manager, S3, EC2, RDS, Lambda, etc.)
+                        
+                        Examples:
+                        - "Show me KMS keys created in FY2025" → filter_by_date=True, audit_period="FY2025"
+                        - "Secrets modified between Jan-Jun 2025" → filter_by_date=True, start_date="2025-01-01", end_date="2025-06-30"
+                        - "S3 buckets created in Q1 2025" → filter_by_date=True, audit_period="Q1-2025"
+                        
+                        Set to true when user mentions:
+                        - Audit period, fiscal year, quarter
+                        - Date range, "created in", "modified during"
+                        - "FY2025", "2025", "Q1-2025", etc.
+                        - "Last year", "this year", "last quarter"
+                        
+                        Default: false (shows all resources regardless of date)
+                        """
+                    },
+                    "audit_period": {
+                        "type": "string",
+                        "description": """Audit period for date filtering (used with filter_by_date=True).
+                        
+                        Supported formats:
+                        - "FY2025" → Jan 1, 2025 to Dec 31, 2025
+                        - "FY2024" → Jan 1, 2024 to Dec 31, 2024
+                        - "Q1-2025" → Jan 1, 2025 to Mar 31, 2025
+                        - "Q2-2025" → Apr 1, 2025 to Jun 30, 2025
+                        - "Q3-2025" → Jul 1, 2025 to Sep 30, 2025
+                        - "Q4-2025" → Oct 1, 2025 to Dec 31, 2025
+                        - "2025" → Jan 1, 2025 to Dec 31, 2025
+                        
+                        Default: Current year
+                        """
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date for custom date range filtering (YYYY-MM-DD format). Example: '2025-01-01'. Takes precedence over audit_period if provided."
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date for custom date range filtering (YYYY-MM-DD format). Example: '2025-12-31'. Must be used with start_date."
+                    },
+                    "date_column": {
+                        "type": "string",
+                        "description": """Specific date column to filter by (optional - auto-detects if not provided).
+                        
+                        Common date columns:
+                        - KMS: "Creation date"
+                        - Secrets Manager: "Last modified", "Last accessed"
+                        - S3: "Creation date"
+                        - RDS: "Creation time"
+                        - EC2: "Launch time"
+                        - Lambda: "Last modified"
+                        - IAM: "Created"
+                        
+                        If not provided, agent will auto-detect the appropriate date column.
+                        """
+                    },
                     "aws_account": {
                         "type": "string",
                         "description": "AWS PRODUCTION account profile name (REQUIRED - must ask user to confirm!). For audit evidence, use production accounts only: ctr-prod, sxo101, sxo202. DO NOT use ctr-int or ctr-test for audit evidence."

@@ -376,6 +376,11 @@ class ToolExecutor:
             resource_index = params.get('resource_index', 0)
             capture_all_pages = params.get('capture_all_pages', False)  # 🔄 PAGINATION
             max_pages = params.get('max_pages', 50)  # 🔄 PAGINATION
+            filter_by_date = params.get('filter_by_date', False)  # 📅 DATE FILTER
+            audit_period = params.get('audit_period', '')  # 📅 DATE FILTER
+            start_date = params.get('start_date', '')  # 📅 DATE FILTER
+            end_date = params.get('end_date', '')  # 📅 DATE FILTER
+            date_column = params.get('date_column', '')  # 📅 DATE FILTER
             
             # Decode HTML entities (e.g., &amp; -> &)
             if config_tab:
@@ -550,6 +555,36 @@ class ToolExecutor:
                             time.sleep(2)
                         else:
                             console.print(f"[yellow]⚠️  Tab '{config_tab}' not found, capturing current view[/yellow]")
+
+                    # 📅 DATE FILTERING (NEW!)
+                    if filter_by_date:
+                        console.print(f"\n[bold yellow]📅 DATE FILTERING ENABLED[/bold yellow]")
+                        
+                        # Import date filter
+                        from tools.aws_date_filter import AWSDateFilter
+                        date_filter = AWSDateFilter(browser.driver)
+                        
+                        # Apply filter
+                        filter_params = {
+                            "audit_period": audit_period or "FY2025",
+                            "start_date": start_date or None,
+                            "end_date": end_date or None,
+                            "date_column": date_column or None
+                        }
+                        
+                        filter_result = date_filter.filter_by_audit_period(**filter_params)
+                        
+                        if filter_result["status"] == "success":
+                            console.print(f"[green]✅ Date filter applied successfully![/green]")
+                            console.print(f"[green]   Filtered: {filter_result['filtered_count']} resources[/green]")
+                            console.print(f"[green]   Total: {filter_result['total_count']} resources[/green]")
+                            console.print(f"[green]   Period: {filter_result['start_date']} to {filter_result['end_date']}[/green]\n")
+                            
+                            # Wait for visual update
+                            time.sleep(1)
+                        else:
+                            console.print(f"[yellow]⚠️  Date filter failed: {filter_result.get('error', 'Unknown error')}[/yellow]")
+                            console.print(f"[yellow]   Continuing without filter...[/yellow]\n")
 
                     # 🔄 PAGINATION HANDLING (NEW!)
                     if capture_all_pages:
