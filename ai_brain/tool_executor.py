@@ -105,11 +105,18 @@ class ToolExecutor:
             if tool_name == "sharepoint_review_evidence":
                 return self._execute_sharepoint_review(tool_input)
             
+            elif tool_name == "aws_console_action":
+                return self._execute_aws_console_action(tool_input)
+            
             elif tool_name == "aws_navigate":
-                return self._execute_aws_navigate(tool_input)
+                # Legacy support - redirect to aws_console_action with capture_screenshot=false
+                tool_input["capture_screenshot"] = False
+                return self._execute_aws_console_action(tool_input)
             
             elif tool_name == "aws_take_screenshot":
-                return self._execute_aws_screenshot(tool_input)
+                # Legacy support - redirect to aws_console_action with capture_screenshot=true
+                tool_input["capture_screenshot"] = True
+                return self._execute_aws_console_action(tool_input)
             
             elif tool_name == "aws_export_data":
                 return self._execute_aws_export(tool_input)
@@ -349,6 +356,139 @@ class ToolExecutor:
         
         except Exception as e:
             return {"status": "error", "error": f"SharePoint review failed: {str(e)}"}
+    
+    def _execute_aws_console_action(self, params: Dict) -> Dict:
+        """
+        🎯 UNIVERSAL AWS CONSOLE TOOL
+        
+        Handles:
+        1. Navigation only (capture_screenshot=false)
+        2. Navigation + Screenshot (capture_screenshot=true)
+        3. Navigation + Export (export_format set)
+        """
+        # Check what action is requested
+        capture_screenshot = params.get("capture_screenshot", False)
+        export_format = params.get("export_format", "")
+        
+        if capture_screenshot:
+            console.print("\n[bold cyan]📸 AWS Console Action: NAVIGATE + SCREENSHOT[/bold cyan]")
+        elif export_format:
+            console.print(f"\n[bold cyan]📊 AWS Console Action: NAVIGATE + EXPORT ({export_format.upper()})[/bold cyan]")
+        else:
+            console.print("\n[bold cyan]🧭 AWS Console Action: NAVIGATE ONLY[/bold cyan]")
+        
+        service = params.get("service", "").lower()
+        account = params.get("aws_account")
+        region = params.get("aws_region")
+        section_name = params.get("section_name")
+        
+        console.print(f"   Service: {service.upper()}")
+        console.print(f"   Account: {account}")
+        console.print(f"   Region: {region}")
+        if section_name:
+            console.print(f"   Section: {section_name}")
+        
+        try:
+            # Get browser session
+            browser = BrowserSessionManager.get_browser()
+            if not browser:
+                return {
+                    "status": "error",
+                    "error": "Failed to initialize browser session"
+                }
+            
+            # Authenticate to AWS
+            if not browser.authenticate_aws(account):
+                return {
+                    "status": "error",
+                    "error": f"Failed to authenticate to AWS account: {account}"
+                }
+            
+            # Change region if needed
+            current_region = browser.get_current_region()
+            if current_region != region:
+                console.print(f"[cyan]🌍 Switching region: {current_region} → {region}[/cyan]")
+                if not browser.change_region(region):
+                    console.print(f"[yellow]⚠️  Region switch may have failed, continuing...[/yellow]")
+            
+            # Get universal navigator
+            universal_nav = BrowserSessionManager.get_universal_navigator()
+            if not universal_nav:
+                return {
+                    "status": "error",
+                    "error": "Failed to get universal navigator"
+                }
+            
+            # Navigate to service
+            console.print(f"\n[cyan]🚀 Navigating to {service.upper()}...[/cyan]")
+            if not universal_nav.navigate_to_service(service, use_search=True):
+                return {
+                    "status": "error",
+                    "error": f"Failed to navigate to {service}"
+                }
+            
+            console.print(f"[green]✅ Navigated to {service.upper()}[/green]")
+            
+            # Navigate to section if specified
+            if section_name:
+                console.print(f"[cyan]🧭 Navigating to section: '{section_name}'...[/cyan]")
+                section_success = universal_nav.navigate_to_section(
+                    section_name=section_name
+                )
+                
+                if section_success:
+                    console.print(f"[green]✅ Navigated to section: {section_name}[/green]")
+                else:
+                    console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
+            
+            # Get current URL
+            current_url = browser.driver.current_url
+            
+            # Now decide what action to take
+            if export_format:
+                # TODO: Implement export logic
+                console.print(f"\n[yellow]⚠️  Export feature coming soon![/yellow]")
+                console.print(f"[yellow]   For now, use aws_export_data tool for API-based exports[/yellow]")
+                return {
+                    "status": "partial_success",
+                    "message": f"Navigated to {service.upper()}, but export not yet implemented",
+                    "current_url": current_url,
+                    "service": service,
+                    "account": account,
+                    "region": region
+                }
+            
+            elif capture_screenshot:
+                # Capture screenshot
+                console.print(f"\n[bold cyan]📸 Capturing screenshot...[/bold cyan]")
+                
+                # Delegate to existing screenshot logic
+                return self._execute_aws_screenshot(params)
+            
+            else:
+                # Navigation only - just confirm and return
+                console.print(f"\n[bold green]✅ NAVIGATION COMPLETE![/bold green]")
+                console.print(f"[green]   Current URL: {current_url}[/green]")
+                console.print(f"[green]   Browser remains open for further commands[/green]\n")
+                
+                return {
+                    "status": "success",
+                    "message": f"Successfully navigated to {service.upper()} in {account} ({region})",
+                    "current_url": current_url,
+                    "service": service,
+                    "account": account,
+                    "region": region,
+                    "section": section_name,
+                    "browser_open": True,
+                    "action": "navigate_only"
+                }
+            
+        except Exception as e:
+            console.print(f"[red]❌ Console action failed: {e}[/red]")
+            return {
+                "status": "error",
+                "error": f"Console action failed: {str(e)}"
+            }
     
     def _execute_aws_navigate(self, params: Dict) -> Dict:
         """

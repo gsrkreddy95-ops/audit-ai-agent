@@ -111,84 +111,54 @@ Use this after downloading evidence locally or when SharePoint metadata includes
         },
 
         {
-            "name": "aws_navigate",
-            "description": """🧭 NAVIGATION ONLY - Navigate to AWS Console pages WITHOUT taking screenshots.
+            "name": "aws_console_action",
+            "description": """🎯 AWS CONSOLE - Universal tool for ALL AWS Console actions.
             
-            ⚠️  USE THIS TOOL WHEN:
-            - User says "go to", "navigate to", "open", "login to" AWS service
-            - User wants to browse AWS console
-            - User wants to check if they're in the right place
-            - User does NOT explicitly ask for screenshot/capture/evidence
+            This ONE tool handles:
+            1. 🧭 Navigation (go to service/section)
+            2. 📸 Screenshots (capture evidence when requested)
+            3. 📊 Exports (CSV, JSON, PDF when requested)
+            4. 🔍 Viewing (just browse, no capture)
+            5. 🔄 Pagination (capture all pages)
+            6. 📅 Filtering (by date/audit period)
             
-            ❌ DO NOT USE THIS TOOL IF:
-            - User explicitly asks for "screenshot", "capture", "take a picture", "save evidence"
-            - User asks to "collect evidence" or "document"
-            → Use aws_take_screenshot instead
+            ⚠️  IMPORTANT: Screenshot is OPTIONAL!
+            - If user says "go to", "navigate to", "open" → Set capture_screenshot=false (just navigate)
+            - If user says "screenshot", "capture", "document" → Set capture_screenshot=true (navigate + capture)
+            - If user says "export" → Set export_format (CSV/JSON/PDF)
             
-            This tool:
-            - Opens AWS Console in browser
-            - Authenticates with duo-sso if needed (prompts user for MFA)
-            - Navigates to specified service/section
-            - Keeps browser open for further commands
-            - Does NOT capture screenshots
+            EXAMPLES:
             
-            Supports ALL AWS services: RDS, S3, IAM, EC2, VPC, CloudWatch, Bedrock, Lambda, etc.
-            """,
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "service": {
-                        "type": "string",
-                        "description": "AWS service name (e.g., 'bedrock', 's3', 'rds', 'iam', 'ec2', 'lambda')"
-                    },
-                    "aws_account": {
-                        "type": "string",
-                        "description": "AWS account name (e.g., 'ctr-prod', 'ctr-int', 'xdr-prod')"
-                    },
-                    "aws_region": {
-                        "type": "string",
-                        "description": "AWS region (e.g., 'us-east-1', 'us-west-2', 'eu-west-1')"
-                    },
-                    "section_name": {
-                        "type": "string",
-                        "description": "Optional: Specific section within service (e.g., 'Custom Domain Names', 'Snapshots')"
-                    }
-                },
-                "required": ["service", "aws_account", "aws_region"]
-            }
-        },
-
-        {
-            "name": "aws_take_screenshot",
-            "description": """📸 SCREENSHOT & EVIDENCE - Navigate to AWS Console AND capture screenshot.
+            Example 1 - Navigation Only:
+            User: "go to Bedrock console in ctr-int us-east-1"
+            → capture_screenshot=false (JUST NAVIGATE!)
             
-            ⚠️  USE THIS TOOL WHEN:
-            - User explicitly asks for "screenshot", "capture", "take a picture", "save evidence"
-            - User says "collect evidence", "document this", "take a snapshot"
-            - User wants to save proof/evidence of AWS resources
+            Example 2 - Navigation + Screenshot:
+            User: "take screenshot of KMS keys in ctr-prod us-east-1"
+            → capture_screenshot=true (NAVIGATE + CAPTURE!)
             
-            ❌ DO NOT USE THIS TOOL IF:
-            - User only says "go to", "navigate to", "open" (no screenshot requested)
-            - User just wants to browse/check AWS console
-            → Use aws_navigate instead
+            Example 3 - Navigation + Export:
+            User: "export all S3 buckets to CSV"
+            → export_format="csv" (NAVIGATE + EXPORT!)
+            
+            Example 4 - Just Browse:
+            User: "show me what's in RDS console"
+            → capture_screenshot=false (JUST SHOW!)
             
             This tool:
-            - Opens AWS Console in browser
-            - Authenticates with duo-sso if needed (prompts user for MFA)
-            - Navigates to specified service/resource
-            - Can navigate to specific sections within services (e.g., "Custom Domain Names" in API Gateway)
-            - Can select resources from lists/tables
-            - Takes scrolling screenshots for long lists (e.g., 87 S3 buckets)
-            - Adds timestamp to screenshot
-            - Saves to local evidence folder
+            - Opens AWS Console in browser (persistent session)
+            - Authenticates with duo-sso if needed (prompts user for MFA once)
+            - Navigates to ANY AWS service (universal navigator)
+            - Navigates to specific sections (e.g., "Custom Domain Names")
+            - Optionally captures screenshots (only if requested!)
+            - Optionally exports data (CSV, JSON, PDF)
+            - Supports pagination (capture all pages)
+            - Supports date filtering (by audit period)
+            - Validates outputs (confidence scoring)
             
-            Supports ALL AWS services (not limited to enum list!):
-            RDS, S3, IAM, EC2, VPC, CloudWatch, API Gateway, Lambda, DynamoDB, ECS, EKS, CloudFront, etc.
-            
-            NEW FEATURES:
-            - Universal navigation: Can navigate to ANY AWS service (no predefined list needed!)
-            - Section navigation: Navigate to specific pages within a service
-            - Resource selection: Automatically select first resource or specific resource by name
+            Supports ALL AWS services:
+            RDS, S3, IAM, EC2, VPC, CloudWatch, API Gateway, Lambda, DynamoDB, ECS, EKS, 
+            CloudFront, Bedrock, KMS, Secrets Manager, Config, CloudTrail, etc.
             
             Examples:
             1. Navigate to API Gateway → Custom Domain Names → Select first domain
@@ -367,9 +337,50 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                     "rfi_code": {
                         "type": "string",
                         "description": "RFI code to organize evidence under (e.g., 'BCR-06.01')"
+                    },
+                    "capture_screenshot": {
+                        "type": "boolean",
+                        "description": """🎯 CAPTURE SCREENSHOT? (Default: false)
+                        
+                        ⚠️  CRITICAL: Only set to true if user EXPLICITLY requests screenshot/capture/evidence!
+                        
+                        When to set TRUE:
+                        ✅ "take screenshot of..."
+                        ✅ "capture..."
+                        ✅ "document..."
+                        ✅ "collect evidence for..."
+                        ✅ "save proof of..."
+                        
+                        When to set FALSE (just navigate):
+                        ❌ "go to..."
+                        ❌ "navigate to..."
+                        ❌ "open..."
+                        ❌ "show me..."
+                        ❌ "check..."
+                        
+                        Default: false (navigate only, no screenshot)
+                        """
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "description": """📊 EXPORT FORMAT (Optional)
+                        
+                        Set this when user requests data export:
+                        - "csv" → Export to CSV file
+                        - "json" → Export to JSON file
+                        - "pdf" → Export to PDF (if supported)
+                        
+                        Examples:
+                        - "export S3 buckets to CSV" → export_format="csv"
+                        - "save IAM users as JSON" → export_format="json"
+                        
+                        If set, tool will export data instead of/in addition to screenshot.
+                        Leave empty for navigation or screenshot only.
+                        """,
+                        "enum": ["csv", "json", "pdf", ""]
                     }
                 },
-                "required": ["service", "aws_account", "aws_region", "rfi_code"]
+                "required": ["service", "aws_account", "aws_region"]
             }
         },
         
