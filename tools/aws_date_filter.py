@@ -42,6 +42,41 @@ class AWSDateFilter:
     4. Highlighting matching rows for screenshot evidence
     """
     
+    # Service-specific date column mapping (fallback if auto-detection fails)
+    SERVICE_DATE_COLUMNS = {
+        'kms': 'Creation date',
+        'secretsmanager': 'Last modified',
+        'secrets-manager': 'Last modified',
+        's3': 'Creation date',
+        'rds': 'Creation time',
+        'ec2': 'Launch time',
+        'lambda': 'Last modified',
+        'iam': 'Created',
+        'cloudwatch': 'State updated',
+        'dynamodb': 'Creation date',
+        'ecs': 'Created at',
+        'eks': 'Created',
+        'vpc': 'Created',
+        'cloudfront': 'Last modified',
+        'apigateway': 'Created date',
+        'api-gateway': 'Created date',
+        'cloudtrail': 'Created',
+        'sns': 'Created time',
+        'sqs': 'Created timestamp',
+        'elasticache': 'Node create time',
+        'elasticloadbalancing': 'Created time',
+        'elb': 'Created time',
+        'alb': 'Created time',
+        'autoscaling': 'Created time',
+        'cloudformation': 'Creation time',
+        'codepipeline': 'Created',
+        'codebuild': 'Created',
+        'codecommit': 'Creation date',
+        'backup': 'Creation date',
+        'ssm': 'Created date',
+        'systems-manager': 'Created date'
+    }
+    
     def __init__(self, driver):
         """
         Initialize date filter with Selenium driver.
@@ -51,13 +86,15 @@ class AWSDateFilter:
         """
         self.driver = driver
         self.debug = True
+        self.current_service = None  # Track current service for smart column detection
     
     def filter_by_audit_period(
         self,
         audit_period: str = "FY2025",
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        date_column: Optional[str] = None
+        date_column: Optional[str] = None,
+        service: Optional[str] = None
     ) -> Dict:
         """
         Filter AWS resources by audit period.
@@ -101,13 +138,30 @@ class AWSDateFilter:
         console.print("[bold cyan]📅 DATE FILTER ACTIVATED[/bold cyan]")
         console.print("[bold cyan]" + "="*60 + "[/bold cyan]\n")
         
+        # Track current service for smart detection
+        if service:
+            self.current_service = service.lower()
+            console.print(f"[cyan]🔧 Service: {service.upper()}[/cyan]")
+        
         # Parse audit period to dates
         if not start_date or not end_date:
             start_date, end_date = self._parse_audit_period(audit_period)
         
         console.print(f"[cyan]📅 Audit Period: {audit_period}[/cyan]")
         console.print(f"[cyan]   Start Date: {start_date}[/cyan]")
-        console.print(f"[cyan]   End Date: {end_date}[/cyan]\n")
+        console.print(f"[cyan]   End Date: {end_date}[/cyan]")
+        
+        # Smart date column selection
+        if not date_column and self.current_service:
+            # Try service-specific mapping first
+            date_column = self.SERVICE_DATE_COLUMNS.get(self.current_service)
+            if date_column:
+                console.print(f"[cyan]🎯 Using service-specific column: '{date_column}'[/cyan]")
+        
+        if date_column:
+            console.print(f"[cyan]📊 Date Column: {date_column}[/cyan]\n")
+        else:
+            console.print(f"[cyan]🔍 Date Column: Auto-detect[/cyan]\n")
         
         # Wait for page to load
         time.sleep(2)
@@ -444,6 +498,15 @@ class AWSDateFilter:
         """
         Auto-detect date column names in current AWS table.
         
+        Detects service-specific date columns like:
+        - KMS: "Creation date"
+        - Secrets Manager: "Last modified", "Last accessed"
+        - S3: "Creation date"
+        - RDS: "Creation time"
+        - EC2: "Launch time"
+        - Lambda: "Last modified"
+        - IAM: "Created"
+        
         Returns:
             List of date column names found
         """
@@ -455,20 +518,41 @@ class AWSDateFilter:
                 headers.forEach((header, index) => {
                     let text = header.textContent.trim().toLowerCase();
                     
-                    // Date-related keywords
-                    if (text.includes('date') || 
-                        text.includes('time') || 
-                        text.includes('created') ||
-                        text.includes('modified') ||
-                        text.includes('updated') ||
-                        text.includes('launched') ||
-                        text.includes('last')) {
+                    // ENHANCED: Service-specific date-related keywords
+                    let dateKeywords = [
+                        'date',         // "Creation date", "Last date"
+                        'time',         // "Creation time", "Launch time"
+                        'created',      // "Created", "Date created"
+                        'creation',     // "Creation date", "Creation time"
+                        'modified',     // "Last modified", "Modified date"
+                        'updated',      // "Last updated", "State updated"
+                        'launched',     // "Launch time", "Launched at"
+                        'changed',      // "Last changed", "Changed date"
+                        'accessed',     // "Last accessed"
+                        'retrieved',    // "Last retrieved"
+                        'last',         // "Last modified", "Last updated"
+                        'when',         // "When created"
+                        'timestamp',    // Generic timestamp columns
+                        'started',      // "Started at", "Start time"
+                        'ended'         // "Ended at", "End time"
+                    ];
+                    
+                    // Check if header text contains any date keyword
+                    let isDateColumn = dateKeywords.some(keyword => text.includes(keyword));
+                    
+                    if (isDateColumn) {
                         columns.push({
                             index: index,
-                            name: header.textContent.trim()
+                            name: header.textContent.trim(),
+                            priority: text.includes('creation') ? 1 : 
+                                     text.includes('created') ? 2 :
+                                     text.includes('modified') ? 3 : 4
                         });
                     }
                 });
+                
+                // Sort by priority (Creation date/time gets highest priority)
+                columns.sort((a, b) => a.priority - b.priority);
                 
                 return columns;
             """
@@ -477,7 +561,12 @@ class AWSDateFilter:
             column_names = [col['name'] for col in columns]
             
             if column_names:
-                console.print(f"[cyan]📅 Date columns found: {', '.join(column_names)}[/cyan]")
+                console.print(f"[cyan]📅 Date columns detected:[/cyan]")
+                for i, name in enumerate(column_names, 1):
+                    priority_label = "🎯 PRIMARY" if i == 1 else "   secondary"
+                    console.print(f"[cyan]   {priority_label}: {name}[/cyan]")
+            else:
+                console.print(f"[yellow]⚠️  No date columns detected (will search all cells)[/yellow]")
             
             return column_names
             

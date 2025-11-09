@@ -564,12 +564,13 @@ class ToolExecutor:
                         from tools.aws_date_filter import AWSDateFilter
                         date_filter = AWSDateFilter(browser.driver)
                         
-                        # Apply filter
+                        # Apply filter (passing service for smart column detection)
                         filter_params = {
                             "audit_period": audit_period or "FY2025",
                             "start_date": start_date or None,
                             "end_date": end_date or None,
-                            "date_column": date_column or None
+                            "date_column": date_column or None,
+                            "service": service  # 🎯 Pass service for smart detection
                         }
                         
                         filter_result = date_filter.filter_by_audit_period(**filter_params)
