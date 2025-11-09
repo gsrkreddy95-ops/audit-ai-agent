@@ -390,26 +390,18 @@ class ToolExecutor:
             console.print(f"   Section: {section_name}")
         
         try:
-            # Get browser session
-            browser = BrowserSessionManager.get_browser()
-            if not browser:
-                return {
-                    "status": "error",
-                    "error": "Failed to initialize browser session"
-                }
-            
-            # Authenticate to AWS
-            if not browser.authenticate_aws(account):
+            # Authenticate to AWS account using BrowserSessionManager
+            if not BrowserSessionManager.authenticate_aws(account):
                 return {
                     "status": "error",
                     "error": f"Failed to authenticate to AWS account: {account}"
                 }
             
             # Change region if needed
-            current_region = browser.get_current_region()
-            if current_region != region:
+            current_region = BrowserSessionManager.get_current_region()
+            if current_region and current_region != region:
                 console.print(f"[cyan]🌍 Switching region: {current_region} → {region}[/cyan]")
-                if not browser.change_region(region):
+                if not BrowserSessionManager.change_region(region):
                     console.print(f"[yellow]⚠️  Region switch may have failed, continuing...[/yellow]")
             
             # Get universal navigator
@@ -442,8 +434,9 @@ class ToolExecutor:
                 else:
                     console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
             
-            # Get current URL
-            current_url = browser.driver.current_url
+            # Get current URL from browser
+            browser = BrowserSessionManager.get_browser()
+            current_url = browser.driver.current_url if browser else "Unknown"
             
             # Now decide what action to take
             if export_format:
@@ -486,6 +479,8 @@ class ToolExecutor:
             
         except Exception as e:
             console.print(f"[red]❌ Console action failed: {e}[/red]")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
             return {
                 "status": "error",
                 "error": f"Console action failed: {str(e)}"
