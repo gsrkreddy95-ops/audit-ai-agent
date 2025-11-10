@@ -182,17 +182,66 @@ class BrowserSessionManager:
 
         console.print(f"[cyan]🔐 Authenticating to AWS account: {account}[/cyan]")
 
-        # Perform Duo SSO authentication
-        if browser.authenticate_aws_duo_sso(account_name=account):
-            cls._authenticated_accounts.add(account)
-            cls._last_authenticated_account = account
-            console.print(f"[green]✅ Authenticated to {account} successfully![/green]")
-            cls._refresh_current_region(reason="post-authentication")
-            cls._dismiss_cookie_banner()
-            return True
-        else:
-            console.print(f"[red]❌ Authentication to {account} failed[/red]")
-            return False
+        # Perform Duo SSO authentication with retry logic
+        max_retries = 2
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Check if browser is still alive
+                if not browser.driver or not browser.driver.current_url:
+                    console.print(f"[yellow]⚠️  Browser died during auth attempt {attempt}, restarting...[/yellow]")
+                    cls.close_browser()
+                    browser = cls.get_browser()
+                    if not browser:
+                        console.print(f"[red]❌ Failed to restart browser[/red]")
+                        return False
+                
+                if attempt > 1:
+                    console.print(f"[yellow]🔄 Retry attempt {attempt}/{max_retries}...[/yellow]")
+                
+                # Attempt authentication
+                if browser.authenticate_aws_duo_sso(account_name=account):
+                    cls._authenticated_accounts.add(account)
+                    cls._last_authenticated_account = account
+                    console.print(f"[green]✅ Authenticated to {account} successfully![/green]")
+                    cls._refresh_current_region(reason="post-authentication")
+                    cls._dismiss_cookie_banner()
+                    return True
+                else:
+                    if attempt < max_retries:
+                        console.print(f"[yellow]⚠️  Auth attempt {attempt} failed, retrying...[/yellow]")
+                        time.sleep(2)
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # Check if it's a "browser closed" error
+                if 'no such window' in error_str or 'target window already closed' in error_str or 'web view not found' in error_str:
+                    console.print(f"[red]❌ Browser window closed unexpectedly![/red]")
+                    console.print(f"[yellow]   Error: {e}[/yellow]")
+                    
+                    if attempt < max_retries:
+                        console.print(f"[yellow]🔄 Restarting browser and retrying...[/yellow]")
+                        cls.close_browser()
+                        time.sleep(3)  # Give Chrome time to clean up
+                        browser = cls.get_browser()
+                        if not browser:
+                            console.print(f"[red]❌ Failed to restart browser[/red]")
+                            return False
+                    else:
+                        console.print(f"[red]❌ Max retries reached[/red]")
+                        return False
+                else:
+                    # Other error
+                    console.print(f"[red]❌ Authentication error: {e}[/red]")
+                    if attempt < max_retries:
+                        console.print(f"[yellow]🔄 Retrying...[/yellow]")
+                        time.sleep(2)
+                    else:
+                        return False
+        
+        # All retries exhausted
+        console.print(f"[red]❌ Authentication to {account} failed after {max_retries} attempts[/red]")
+        return False
     
     @classmethod
     def get_universal_navigator(cls):
