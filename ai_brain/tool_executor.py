@@ -779,7 +779,16 @@ class ToolExecutor:
                         if element:
                             console.print(f"[green]✅ Found resource, opening details...[/green]")
                             from tools.universal_screenshot_enhanced import ClickStrategy
-                            browser.click_element(element, strategy=ClickStrategy.JAVASCRIPT, description=f"Open {resource_name}")
+                            
+                            # FIX: find_element_intelligent returns (By, selector) tuple
+                            # but click_element expects just the selector string
+                            if isinstance(element, tuple) and len(element) == 2:
+                                # Extract just the selector string from the tuple
+                                selector_string = element[1]
+                                browser.click_element(selector_string, strategy=ClickStrategy.JAVASCRIPT, description=f"Open {resource_name}")
+                            else:
+                                # If it's already a string, use it directly
+                                browser.click_element(element, strategy=ClickStrategy.JAVASCRIPT, description=f"Open {resource_name}")
                             time.sleep(2)
                         else:
                             console.print(f"[yellow]⚠️  Resource '{resource_name}' not found; capturing overview[/yellow]")
