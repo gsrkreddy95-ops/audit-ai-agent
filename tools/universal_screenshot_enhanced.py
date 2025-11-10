@@ -2260,7 +2260,7 @@ class UniversalScreenshotEnhanced:
                 # Clear AWS session cookies before closing
                 try:
                     console.print("[dim]🧹 Clearing AWS session cookies...[/dim]")
-                    self.driver.delete_all_cookies()
+                    # self.driver.delete_all_cookies()  # TEMPORARILY COMMENTED OUT FOR TESTING
                     
                     # Close all extra windows/tabs
                     if len(self.driver.window_handles) > 1:
@@ -2291,7 +2291,8 @@ class UniversalScreenshotEnhanced:
                 # CRITICAL: Clear AWS cookies from disk (user data directory)
                 # The persistent user data dir saves cookies to disk, which get reloaded on next launch
                 if self.user_data_dir:  # Only if using persistent profile
-                    self._clear_aws_cookies_from_disk()
+                    # self._clear_aws_cookies_from_disk()  # TEMPORARILY COMMENTED OUT FOR TESTING
+                    console.print("[dim]🔄 Cookie cleanup disabled - session will persist[/dim]")
                 else:
                     console.print("[dim]   Temporary profile used - no disk cleanup needed[/dim]")
                 
