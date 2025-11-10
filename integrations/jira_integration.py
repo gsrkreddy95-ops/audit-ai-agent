@@ -119,15 +119,16 @@ class JiraIntegration:
             
             console.print(f"[cyan]🔍 Searching Jira with JQL: {jql}[/cyan]")
             
-            # Execute search using new Jira Cloud API
+            # Execute search using new Jira Cloud API (POST method)
             try:
-                response = self.jira._session.get(
+                response = self.jira._session.post(
                     f"{self.jira._options['server']}/rest/api/3/search/jql",
-                    params={
+                    json={
                         'jql': jql,
                         'maxResults': max_results,
-                        'fields': '*all'
-                    }
+                        'fields': ['*all']
+                    },
+                    headers={'Content-Type': 'application/json'}
                 )
                 response.raise_for_status()
                 search_results = response.json()
@@ -220,16 +221,22 @@ class JiraIntegration:
                 while True:
                     # Fetch a page of results using Jira Cloud's new JQL API
                     try:
-                        # Use _get_json with the new /search/jql endpoint for Jira Cloud
-                        response = self.jira._session.get(
+                        # NOTE: /search/jql is a POST endpoint with JSON body
+                        response = self.jira._session.post(
                             f"{self.jira._options['server']}/rest/api/3/search/jql",
-                            params={
+                            json={
                                 'jql': jql_query,
                                 'startAt': start_at,
                                 'maxResults': page_size,
-                                'fields': '*all'
-                            }
+                                'fields': ['*all']
+                            },
+                            headers={'Content-Type': 'application/json'}
                         )
+                        
+                        # DEBUG: Log the request details
+                        if start_at == 0:
+                            console.print(f"[dim]   API Request: POST /rest/api/3/search/jql[/dim]")
+                            console.print(f"[dim]   JQL: {jql_query}[/dim]")
                         response.raise_for_status()
                         search_results = response.json()
                         
@@ -334,15 +341,16 @@ class JiraIntegration:
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
                 return tickets
             else:
-                # Single request (no pagination) using new Jira Cloud API
+                # Single request (no pagination) using new Jira Cloud API (POST method)
                 try:
-                    response = self.jira._session.get(
+                    response = self.jira._session.post(
                         f"{self.jira._options['server']}/rest/api/3/search/jql",
-                        params={
+                        json={
                             'jql': jql_query,
                             'maxResults': max_results,
-                            'fields': '*all'
-                        }
+                            'fields': ['*all']
+                        },
+                        headers={'Content-Type': 'application/json'}
                     )
                     response.raise_for_status()
                     search_results = response.json()
