@@ -958,9 +958,14 @@ class UniversalScreenshotEnhanced:
                                 
                                 // Check if this element or its siblings contain "Account:"
                                 if (text.indexOf('Account:') !== -1) {
-                                    // Check if our target account name is in this section
-                                    if (text.indexOf('Account: ' + accountName) !== -1) {
+                                    // FLEXIBLE MATCHING: Convert to lowercase and check if account name appears ANYWHERE in the text
+                                    var textLower = text.toLowerCase();
+                                    var accountNameLower = accountName.toLowerCase();
+                                    
+                                    // Check if our target account name is in this section (case-insensitive, partial match)
+                                    if (textLower.indexOf(accountNameLower) !== -1) {
                                         console.log('✓ Found radio under account:', accountName);
+                                        console.log('  Full account text:', text.substring(0, 100));
                                         targetRadio = radio;
                                         foundAccountHeader = true;
                                         
@@ -982,7 +987,7 @@ class UniversalScreenshotEnhanced:
                                         break;
                                     } else {
                                         // This radio belongs to a different account
-                                        console.log('✗ Radio belongs to different account');
+                                        console.log('✗ Radio belongs to different account (found:', text.substring(0, 50), ')');
                                         break;
                                     }
                                 }
