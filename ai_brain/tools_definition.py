@@ -115,19 +115,26 @@ Use this after downloading evidence locally or when SharePoint metadata includes
             "description": """🎯 AWS CONSOLE - Universal tool for ALL AWS Console actions.
             
             This ONE tool handles:
-            1. 🧭 Navigation (go to service/section)
-            2. 📸 Screenshots (capture evidence when requested)
-            3. 📊 Exports (CSV, JSON, PDF when requested)
-            4. 🔍 Viewing (just browse, no capture)
-            5. 🔄 Pagination (capture all pages)
-            6. 📅 Filtering (by date/audit period)
+            1. 🔐 Authentication (sign in / login to AWS account)
+            2. 🧭 Navigation (go to service/section)
+            3. 📸 Screenshots (capture evidence when requested)
+            4. 📊 Exports (CSV, JSON, PDF when requested)
+            5. 🔍 Viewing (just browse, no capture)
+            6. 🔄 Pagination (capture all pages)
+            7. 📅 Filtering (by date/audit period)
             
-            ⚠️  IMPORTANT: Screenshot is OPTIONAL!
+            ⚠️  CRITICAL USAGE RULES:
+            - If user says "sign in", "login", "authenticate" → Use this tool with service="console" or service="" (just login)
             - If user says "go to", "navigate to", "open" → Set capture_screenshot=false (just navigate)
             - If user says "screenshot", "capture", "document" → Set capture_screenshot=true (navigate + capture)
             - If user says "export" → Set export_format (CSV/JSON/PDF)
+            - DO NOT use list_aws_resources for "sign in" or "login" requests!
             
             EXAMPLES:
+            
+            Example 0 - Sign In / Login Only:
+            User: "sign into ctr-int us-east-1" OR "login to ctr-int"
+            → service="console", capture_screenshot=false (JUST LOGIN!)
             
             Example 1 - Navigation Only:
             User: "go to Bedrock console in ctr-int us-east-1"
