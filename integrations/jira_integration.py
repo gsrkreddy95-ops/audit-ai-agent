@@ -119,8 +119,48 @@ class JiraIntegration:
             
             console.print(f"[cyan]🔍 Searching Jira with JQL: {jql}[/cyan]")
             
-            # Execute search
-            issues = self.jira.search_issues(jql, maxResults=max_results)
+            # Execute search using new Jira Cloud API
+            try:
+                response = self.jira._session.get(
+                    f"{self.jira._options['server']}/rest/api/3/search/jql",
+                    params={
+                        'jql': jql,
+                        'maxResults': max_results,
+                        'fields': '*all'
+                    }
+                )
+                response.raise_for_status()
+                search_results = response.json()
+                
+                # Convert raw JSON to Issue objects
+                issues = []
+                for issue_data in search_results.get('issues', []):
+                    try:
+                        from jira.resources import Issue
+                        issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
+                        issues.append(issue)
+                    except Exception:
+                        # Fallback
+                        class SimpleIssue:
+                            def __init__(self, data):
+                                self.key = data.get('key')
+                                self.fields = type('obj', (object,), {
+                                    'summary': data.get('fields', {}).get('summary', ''),
+                                    'status': type('obj', (object,), {'name': data.get('fields', {}).get('status', {}).get('name', 'Unknown')})(),
+                                    'priority': type('obj', (object,), {'name': data.get('fields', {}).get('priority', {}).get('name', 'None')})() if data.get('fields', {}).get('priority') else None,
+                                    'assignee': type('obj', (object,), {'displayName': data.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')})() if data.get('fields', {}).get('assignee') else None,
+                                    'reporter': type('obj', (object,), {'displayName': data.get('fields', {}).get('reporter', {}).get('displayName', 'Unknown')})() if data.get('fields', {}).get('reporter') else None,
+                                    'created': data.get('fields', {}).get('created', ''),
+                                    'updated': data.get('fields', {}).get('updated', ''),
+                                    'issuetype': type('obj', (object,), {'name': data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')})(),
+                                    'labels': data.get('fields', {}).get('labels', []),
+                                    'description': data.get('fields', {}).get('description', '')
+                                })()
+                        issue = SimpleIssue(issue_data)
+                        issues.append(issue)
+            except Exception as e:
+                console.print(f"[red]❌ Error searching: {e}[/red]")
+                return []
             
             # Format results
             tickets = []
@@ -176,12 +216,50 @@ class JiraIntegration:
                 console.print(f"[cyan]📄 Fetching results with pagination (max: {max_results if max_results > 0 else 'all'})...[/cyan]")
                 
                 while True:
-                    # Fetch a page of results
-                    page_issues = self.jira.search_issues(
-                        jql_query, 
-                        startAt=start_at, 
-                        maxResults=page_size
-                    )
+                    # Fetch a page of results using Jira Cloud's new JQL API
+                    try:
+                        # Use _get_json with the new /search/jql endpoint for Jira Cloud
+                        response = self.jira._session.get(
+                            f"{self.jira._options['server']}/rest/api/3/search/jql",
+                            params={
+                                'jql': jql_query,
+                                'startAt': start_at,
+                                'maxResults': page_size,
+                                'fields': '*all'
+                            }
+                        )
+                        response.raise_for_status()
+                        search_results = response.json()
+                        
+                        # Convert raw JSON to Issue objects (match old API behavior)
+                        page_issues = []
+                        for issue_data in search_results.get('issues', []):
+                            try:
+                                from jira.resources import Issue
+                                issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
+                                page_issues.append(issue)
+                            except Exception:
+                                # Fallback: manually create a simple object
+                                class SimpleIssue:
+                                    def __init__(self, data):
+                                        self.key = data.get('key')
+                                        self.fields = type('obj', (object,), {
+                                            'summary': data.get('fields', {}).get('summary', ''),
+                                            'status': type('obj', (object,), {'name': data.get('fields', {}).get('status', {}).get('name', 'Unknown')})(),
+                                            'priority': type('obj', (object,), {'name': data.get('fields', {}).get('priority', {}).get('name', 'None')})() if data.get('fields', {}).get('priority') else None,
+                                            'assignee': type('obj', (object,), {'displayName': data.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')})() if data.get('fields', {}).get('assignee') else None,
+                                            'reporter': type('obj', (object,), {'displayName': data.get('fields', {}).get('reporter', {}).get('displayName', 'Unknown')})() if data.get('fields', {}).get('reporter') else None,
+                                            'created': data.get('fields', {}).get('created', ''),
+                                            'updated': data.get('fields', {}).get('updated', ''),
+                                            'issuetype': type('obj', (object,), {'name': data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')})(),
+                                            'labels': data.get('fields', {}).get('labels', []),
+                                            'description': data.get('fields', {}).get('description', '')
+                                        })()
+                                issue = SimpleIssue(issue_data)
+                                page_issues.append(issue)
+                    except Exception as e:
+                        console.print(f"[red]❌ Error fetching page: {e}[/red]")
+                        raise
                     
                     if not page_issues:
                         break  # No more results
@@ -221,8 +299,48 @@ class JiraIntegration:
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
                 return tickets
             else:
-                # Single request (no pagination)
-                issues = self.jira.search_issues(jql_query, maxResults=max_results)
+                # Single request (no pagination) using new Jira Cloud API
+                try:
+                    response = self.jira._session.get(
+                        f"{self.jira._options['server']}/rest/api/3/search/jql",
+                        params={
+                            'jql': jql_query,
+                            'maxResults': max_results,
+                            'fields': '*all'
+                        }
+                    )
+                    response.raise_for_status()
+                    search_results = response.json()
+                    
+                    # Convert raw JSON to Issue objects
+                    issues = []
+                    for issue_data in search_results.get('issues', []):
+                        try:
+                            from jira.resources import Issue
+                            issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
+                            issues.append(issue)
+                        except Exception:
+                            # Fallback: manually create a simple object
+                            class SimpleIssue:
+                                def __init__(self, data):
+                                    self.key = data.get('key')
+                                    self.fields = type('obj', (object,), {
+                                        'summary': data.get('fields', {}).get('summary', ''),
+                                        'status': type('obj', (object,), {'name': data.get('fields', {}).get('status', {}).get('name', 'Unknown')})(),
+                                        'priority': type('obj', (object,), {'name': data.get('fields', {}).get('priority', {}).get('name', 'None')})() if data.get('fields', {}).get('priority') else None,
+                                        'assignee': type('obj', (object,), {'displayName': data.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')})() if data.get('fields', {}).get('assignee') else None,
+                                        'reporter': type('obj', (object,), {'displayName': data.get('fields', {}).get('reporter', {}).get('displayName', 'Unknown')})() if data.get('fields', {}).get('reporter') else None,
+                                        'created': data.get('fields', {}).get('created', ''),
+                                        'updated': data.get('fields', {}).get('updated', ''),
+                                        'issuetype': type('obj', (object,), {'name': data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')})(),
+                                        'labels': data.get('fields', {}).get('labels', []),
+                                        'description': data.get('fields', {}).get('description', '')
+                                    })()
+                            issue = SimpleIssue(issue_data)
+                            issues.append(issue)
+                except Exception as e:
+                    console.print(f"[red]❌ Error fetching tickets: {e}[/red]")
+                    return []
                 
                 tickets = []
                 for issue in issues:
