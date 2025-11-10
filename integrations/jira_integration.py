@@ -215,6 +215,8 @@ class JiraIntegration:
                 
                 console.print(f"[cyan]📄 Fetching results with pagination (max: {max_results if max_results > 0 else 'all'})...[/cyan]")
                 
+                total_available = None  # Will be set after first request
+                
                 while True:
                     # Fetch a page of results using Jira Cloud's new JQL API
                     try:
@@ -230,6 +232,18 @@ class JiraIntegration:
                         )
                         response.raise_for_status()
                         search_results = response.json()
+                        
+                        # Check total available results from Jira
+                        if total_available is None:
+                            total_available = search_results.get('total', 0)
+                            console.print(f"[dim]   Total matching tickets in Jira: {total_available}[/dim]")
+                            
+                            # Adjust max_results if it exceeds what's actually available
+                            if max_results == 0 or max_results > total_available:
+                                effective_max = total_available
+                            else:
+                                effective_max = max_results
+                            console.print(f"[dim]   Will fetch up to: {effective_max} tickets[/dim]")
                         
                         # Convert raw JSON to Issue objects (match old API behavior)
                         page_issues = []
@@ -288,11 +302,21 @@ class JiraIntegration:
                     
                     console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
                     
-                    # Check if we've hit the max or there are no more results
-                    if max_results > 0 and total_fetched >= max_results:
-                        break
+                    # Check stopping conditions
+                    # 1. No more results on this page
                     if len(page_issues) < page_size:
-                        break  # Last page
+                        console.print(f"[dim]   Last page reached (got {len(page_issues)} < {page_size})[/dim]")
+                        break
+                    
+                    # 2. Reached the total available from Jira
+                    if total_available is not None and total_fetched >= total_available:
+                        console.print(f"[dim]   All available tickets fetched ({total_fetched}/{total_available})[/dim]")
+                        break
+                    
+                    # 3. Hit the user-specified max_results limit
+                    if max_results > 0 and total_fetched >= max_results:
+                        console.print(f"[dim]   Max results limit reached ({total_fetched}/{max_results})[/dim]")
+                        break
                     
                     start_at += page_size
                 
