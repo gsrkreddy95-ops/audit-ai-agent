@@ -414,15 +414,22 @@ class ToolExecutor:
                     "error": "Failed to get universal navigator"
                 }
             
-            # Navigate to service
-            console.print(f"\n[cyan]🚀 Navigating to {service.upper()}...[/cyan]")
-            if not universal_nav.navigate_to_service(service, use_search=True):
-                return {
-                    "status": "error",
-                    "error": f"Failed to navigate to {service}"
-                }
+            # Special case: If service is "console", "home", or "aws", skip navigation (already on console)
+            skip_navigation = service in ["console", "home", "aws", "aws-console", ""]
             
-            console.print(f"[green]✅ Navigated to {service.upper()}[/green]")
+            if skip_navigation:
+                console.print(f"\n[green]✅ Already on AWS Console home page[/green]")
+                console.print(f"[dim]   (No specific service navigation needed)[/dim]")
+            else:
+                # Navigate to service
+                console.print(f"\n[cyan]🚀 Navigating to {service.upper()}...[/cyan]")
+                if not universal_nav.navigate_to_service(service, use_search=True):
+                    return {
+                        "status": "error",
+                        "error": f"Failed to navigate to {service}"
+                    }
+                
+                console.print(f"[green]✅ Navigated to {service.upper()}[/green]")
             
             # Navigate to section if specified
             if section_name:
