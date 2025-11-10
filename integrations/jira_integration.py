@@ -234,16 +234,27 @@ class JiraIntegration:
                         search_results = response.json()
                         
                         # Check total available results from Jira
+                        # NOTE: Jira Cloud's /search/jql API sometimes returns total=0 incorrectly
+                        # We'll trust it only if it's non-zero or if no results are returned
                         if total_available is None:
-                            total_available = search_results.get('total', 0)
-                            console.print(f"[dim]   Total matching tickets in Jira: {total_available}[/dim]")
+                            reported_total = search_results.get('total', 0)
+                            num_issues_in_response = len(search_results.get('issues', []))
                             
-                            # Adjust max_results if it exceeds what's actually available
-                            if max_results == 0 or max_results > total_available:
-                                effective_max = total_available
+                            # If Jira reports 0 but returns results, it's a bug - ignore the total
+                            if reported_total == 0 and num_issues_in_response > 0:
+                                console.print(f"[yellow]⚠️  Jira reported total=0 but returned {num_issues_in_response} issues (known API bug)[/yellow]")
+                                console.print(f"[dim]   Will paginate until no more results...[/dim]")
+                                total_available = -1  # Signal to ignore total and rely on page size
                             else:
-                                effective_max = max_results
-                            console.print(f"[dim]   Will fetch up to: {effective_max} tickets[/dim]")
+                                total_available = reported_total
+                                console.print(f"[dim]   Total matching tickets in Jira: {total_available}[/dim]")
+                                
+                                # Adjust max_results if it exceeds what's actually available
+                                if max_results == 0 or max_results > total_available:
+                                    effective_max = total_available
+                                else:
+                                    effective_max = max_results
+                                console.print(f"[dim]   Will fetch up to: {effective_max} tickets[/dim]")
                         
                         # Convert raw JSON to Issue objects (match old API behavior)
                         page_issues = []
@@ -303,13 +314,13 @@ class JiraIntegration:
                     console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
                     
                     # Check stopping conditions
-                    # 1. No more results on this page
+                    # 1. No more results on this page (most reliable indicator)
                     if len(page_issues) < page_size:
                         console.print(f"[dim]   Last page reached (got {len(page_issues)} < {page_size})[/dim]")
                         break
                     
-                    # 2. Reached the total available from Jira
-                    if total_available is not None and total_fetched >= total_available:
+                    # 2. Reached the total available from Jira (only if total is reliable)
+                    if total_available is not None and total_available > 0 and total_fetched >= total_available:
                         console.print(f"[dim]   All available tickets fetched ({total_fetched}/{total_available})[/dim]")
                         break
                     
