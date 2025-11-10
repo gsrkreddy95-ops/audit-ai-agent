@@ -767,12 +767,18 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
         
         {
             "name": "jira_search_jql",
-            "description": """Advanced Jira search using JQL (Jira Query Language).
+            "description": """Advanced Jira search using JQL (Jira Query Language) with AUTOMATIC PAGINATION.
+            
+            ✨ PAGINATION: Automatically fetches ALL matching tickets across multiple pages!
+            - Jira API limits to 100 per request
+            - This tool automatically paginate to get ALL results (up to max_results)
+            - Use max_results=0 to fetch ALL tickets (no limit)
             
             Use this for complex queries like:
             - 'project = AUDIT AND status = "In Progress" AND priority = High'
             - 'assignee = currentUser() AND created >= -7d'
             - 'labels = security AND updated >= -30d ORDER BY created DESC'
+            - 'project = XDR AND labels = STE AND status not in (Done, Completed)'
             
             JQL is more powerful than basic filters.
             """,
@@ -785,7 +791,11 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of results (default: 100)"
+                        "description": "Maximum number of results (default: 1000, use 0 for ALL)"
+                    },
+                    "paginate": {
+                        "type": "boolean",
+                        "description": "Enable automatic pagination (default: true)"
                     },
                     "export_format": {
                         "type": "string",

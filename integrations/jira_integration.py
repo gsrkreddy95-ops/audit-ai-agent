@@ -148,13 +148,14 @@ class JiraIntegration:
             console.print(f"[red]❌ Error listing tickets: {e}[/red]")
             return []
     
-    def search_jql(self, jql_query: str, max_results: int = 100) -> List[Dict[str, Any]]:
+    def search_jql(self, jql_query: str, max_results: int = 1000, paginate: bool = True) -> List[Dict[str, Any]]:
         """
-        Advanced JQL search
+        Advanced JQL search with automatic pagination
         
         Args:
             jql_query: JQL query string (e.g., 'project = AUDIT AND status = "In Progress"')
-            max_results: Maximum number of results
+            max_results: Maximum number of results (default 1000, use 0 for all)
+            paginate: If True, automatically fetch all results using pagination
         
         Returns:
             List of ticket dictionaries
@@ -165,27 +166,83 @@ class JiraIntegration:
         try:
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
-            issues = self.jira.search_issues(jql_query, maxResults=max_results)
-            
-            tickets = []
-            for issue in issues:
-                ticket = {
-                    'key': issue.key,
-                    'summary': issue.fields.summary,
-                    'status': issue.fields.status.name,
-                    'priority': issue.fields.priority.name if issue.fields.priority else 'None',
-                    'assignee': issue.fields.assignee.displayName if issue.fields.assignee else 'Unassigned',
-                    'reporter': issue.fields.reporter.displayName if issue.fields.reporter else 'Unknown',
-                    'created': str(issue.fields.created),
-                    'updated': str(issue.fields.updated),
-                    'issue_type': issue.fields.issuetype.name,
-                    'labels': issue.fields.labels,
-                    'url': f"{self.jira_url}/browse/{issue.key}"
-                }
-                tickets.append(ticket)
-            
-            console.print(f"[green]✅ Found {len(tickets)} tickets[/green]")
-            return tickets
+            # Jira API limits to 100 per request, so we need pagination
+            if paginate and (max_results == 0 or max_results > 100):
+                tickets = []
+                start_at = 0
+                page_size = 100  # Jira API max per request
+                total_fetched = 0
+                
+                console.print(f"[cyan]📄 Fetching results with pagination (max: {max_results if max_results > 0 else 'all'})...[/cyan]")
+                
+                while True:
+                    # Fetch a page of results
+                    page_issues = self.jira.search_issues(
+                        jql_query, 
+                        startAt=start_at, 
+                        maxResults=page_size
+                    )
+                    
+                    if not page_issues:
+                        break  # No more results
+                    
+                    # Process this page
+                    for issue in page_issues:
+                        ticket = {
+                            'key': issue.key,
+                            'summary': issue.fields.summary,
+                            'status': issue.fields.status.name,
+                            'priority': issue.fields.priority.name if issue.fields.priority else 'None',
+                            'assignee': issue.fields.assignee.displayName if issue.fields.assignee else 'Unassigned',
+                            'reporter': issue.fields.reporter.displayName if issue.fields.reporter else 'Unknown',
+                            'created': str(issue.fields.created),
+                            'updated': str(issue.fields.updated),
+                            'issue_type': issue.fields.issuetype.name,
+                            'labels': issue.fields.labels,
+                            'url': f"{self.jira_url}/browse/{issue.key}"
+                        }
+                        tickets.append(ticket)
+                        total_fetched += 1
+                        
+                        # Check if we've hit the max_results limit
+                        if max_results > 0 and total_fetched >= max_results:
+                            break
+                    
+                    console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
+                    
+                    # Check if we've hit the max or there are no more results
+                    if max_results > 0 and total_fetched >= max_results:
+                        break
+                    if len(page_issues) < page_size:
+                        break  # Last page
+                    
+                    start_at += page_size
+                
+                console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
+                return tickets
+            else:
+                # Single request (no pagination)
+                issues = self.jira.search_issues(jql_query, maxResults=max_results)
+                
+                tickets = []
+                for issue in issues:
+                    ticket = {
+                        'key': issue.key,
+                        'summary': issue.fields.summary,
+                        'status': issue.fields.status.name,
+                        'priority': issue.fields.priority.name if issue.fields.priority else 'None',
+                        'assignee': issue.fields.assignee.displayName if issue.fields.assignee else 'Unassigned',
+                        'reporter': issue.fields.reporter.displayName if issue.fields.reporter else 'Unknown',
+                        'created': str(issue.fields.created),
+                        'updated': str(issue.fields.updated),
+                        'issue_type': issue.fields.issuetype.name,
+                        'labels': issue.fields.labels,
+                        'url': f"{self.jira_url}/browse/{issue.key}"
+                    }
+                    tickets.append(ticket)
+                
+                console.print(f"[green]✅ Found {len(tickets)} tickets[/green]")
+                return tickets
         
         except Exception as e:
             console.print(f"[red]❌ JQL search failed: {e}[/red]")

@@ -1942,7 +1942,8 @@ class ToolExecutor:
             
             tickets = jira.search_jql(
                 jql_query=params.get('jql_query'),
-                max_results=params.get('max_results', 100)
+                max_results=params.get('max_results', 1000),  # Default to 1000 (will paginate)
+                paginate=params.get('paginate', True)  # Enable pagination by default
             )
             
             # Export if requested
