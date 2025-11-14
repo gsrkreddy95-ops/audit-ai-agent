@@ -661,6 +661,33 @@ class AWSExportToolEnhanced:
             return False
 
 
+def _write_empty_placeholder(format: str, output_path: str, message: str) -> bool:
+    """Create placeholder evidence file when no resources exist"""
+    try:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        if format == 'csv':
+            with open(output_path, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['message'])
+                writer.writerow([message])
+        elif format == 'json':
+            with open(output_path, 'w') as f:
+                json.dump({
+                    "message": message,
+                    "data": []
+                }, f, indent=2)
+        else:
+            with open(output_path, 'w') as f:
+                f.write(message + "\n")
+        
+        console.print(f"[green]✅ Saved placeholder file: {output_path}[/green]")
+        return True
+    except Exception as e:
+        console.print(f"[red]❌ Error writing placeholder file: {e}[/red]")
+        return False
+
+
 # High-level export function for tool_executor compatibility
 def export_aws_data(
     service: str,
@@ -722,8 +749,13 @@ def export_aws_data(
             data = exporter.export_ec2_instances()
     
     if not data:
-        console.print("[yellow]⚠️  No data retrieved[/yellow]")
-        return False
+        context = (f"No {service.upper()} {export_type} resources found in region "
+                   f"{aws_region} for account {aws_account}")
+        console.print(f"[yellow]⚠️  {context}[/yellow]")
+        
+        # Create placeholder evidence file instead of failing
+        placeholder_saved = _write_empty_placeholder(format, output_path, context)
+        return placeholder_saved
     
     # Save in requested format
     if format == 'csv':
