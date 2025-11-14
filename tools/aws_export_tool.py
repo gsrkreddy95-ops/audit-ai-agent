@@ -203,8 +203,8 @@ class AWSExportTool:
             return []
     
     def export_rds_clusters(self) -> List[Dict]:
-        """Export RDS clusters"""
-        console.print("[cyan]📥 Exporting RDS clusters...[/cyan]")
+        """Export RDS clusters with complete configuration including encryption and backup details"""
+        console.print("[cyan]📥 Exporting RDS clusters with encryption & backup details...[/cyan]")
         
         try:
             session = self._get_session()
@@ -215,19 +215,80 @@ class AWSExportTool:
             
             for page in paginator.paginate():
                 for cluster in page['DBClusters']:
-                    clusters.append({
+                    # Extract encryption information
+                    storage_encrypted = cluster.get('StorageEncrypted', False)
+                    kms_key_id = cluster.get('KmsKeyId', 'N/A') if storage_encrypted else 'N/A (Not Encrypted)'
+                    
+                    # Extract backup information
+                    backup_retention = cluster.get('BackupRetentionPeriod', 0)
+                    backup_window = cluster.get('PreferredBackupWindow', 'Not Set')
+                    
+                    # Latest restorable time
+                    latest_restorable = cluster.get('LatestRestorableTime')
+                    latest_restorable_str = latest_restorable.isoformat() if latest_restorable else 'N/A'
+                    
+                    # Automated backups
+                    automated_backups = 'Enabled' if backup_retention > 0 else 'Disabled'
+                    
+                    # Snapshot copy info
+                    copy_tags_to_snapshot = cluster.get('CopyTagsToSnapshot', False)
+                    
+                    # IAM database authentication
+                    iam_db_auth = cluster.get('IAMDatabaseAuthenticationEnabled', False)
+                    
+                    # Deletion protection
+                    deletion_protection = cluster.get('DeletionProtection', False)
+                    
+                    cluster_data = {
                         'DBClusterIdentifier': cluster['DBClusterIdentifier'],
                         'Engine': cluster['Engine'],
                         'EngineVersion': cluster['EngineVersion'],
                         'Status': cluster['Status'],
                         'MultiAZ': cluster.get('MultiAZ', False),
-                        'BackupRetentionPeriod': cluster['BackupRetentionPeriod'],
-                        'PreferredBackupWindow': cluster.get('PreferredBackupWindow', ''),
+                        
+                        # Backup Configuration
+                        'BackupRetentionPeriod': backup_retention,
+                        'BackupRetentionDays': f"{backup_retention} days",
+                        'PreferredBackupWindow': backup_window,
+                        'AutomatedBackups': automated_backups,
+                        'LatestRestorableTime': latest_restorable_str,
+                        'CopyTagsToSnapshot': copy_tags_to_snapshot,
+                        
+                        # Encryption Status
+                        'StorageEncrypted': storage_encrypted,
+                        'EncryptionStatus': 'Encrypted' if storage_encrypted else 'NOT ENCRYPTED ⚠️',
+                        'KmsKeyId': kms_key_id,
+                        
+                        # Security
+                        'IAMDatabaseAuth': iam_db_auth,
+                        'DeletionProtection': deletion_protection,
+                        
+                        # Location
                         'AvailabilityZones': ', '.join(cluster.get('AvailabilityZones', [])),
-                        'ClusterCreateTime': cluster['ClusterCreateTime'].isoformat() if 'ClusterCreateTime' in cluster else ''
-                    })
+                        'Endpoint': cluster.get('Endpoint', 'N/A'),
+                        'ReaderEndpoint': cluster.get('ReaderEndpoint', 'N/A'),
+                        
+                        # Metadata
+                        'ClusterCreateTime': cluster['ClusterCreateTime'].isoformat() if 'ClusterCreateTime' in cluster else '',
+                        'DBClusterArn': cluster.get('DBClusterArn', ''),
+                        
+                        # Additional Details
+                        'AllocatedStorage': cluster.get('AllocatedStorage', 'N/A'),
+                        'Port': cluster.get('Port', 'N/A'),
+                        'MasterUsername': cluster.get('MasterUsername', 'N/A'),
+                        'DatabaseName': cluster.get('DatabaseName', 'N/A'),
+                    }
+                    
+                    # Add tags if present
+                    tags = cluster.get('TagList', [])
+                    if tags:
+                        cluster_data['Tags'] = json.dumps(tags)
+                    else:
+                        cluster_data['Tags'] = '[]'
+                    
+                    clusters.append(cluster_data)
             
-            console.print(f"[green]✅ Exported {len(clusters)} RDS clusters[/green]")
+            console.print(f"[green]✅ Exported {len(clusters)} RDS clusters with full configuration[/green]")
             return clusters
             
         except Exception as e:
