@@ -12,6 +12,7 @@ Features:
 import os
 import json
 import csv
+import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,7 @@ class JiraIntegration:
         self.epic_field_id: Optional[str] = None
         self.story_points_field_id: Optional[str] = None
         self.team_field_id: Optional[str] = None
+        self.board_filter_cache: Dict[str, str] = {}
         self._field_map_initialized = False
         
         if not all([self.jira_url, self.email, self.api_token]):
@@ -286,6 +288,91 @@ class JiraIntegration:
         
         return {}
     
+    def _augment_jql_with_board_filter(self, jql_query: Optional[str], board_name: Optional[str]) -> str:
+        """Combine user JQL with board filter JQL (if board provided)"""
+        base_jql = (jql_query or '').strip()
+        if not board_name:
+            return base_jql
+        
+        project_hint = self._extract_project_key_from_jql(base_jql)
+        board_filter_jql = self._get_board_filter_jql(board_name, project_hint)
+        if not board_filter_jql:
+            console.print(f"[yellow]⚠️  Could not resolve board '{board_name}'. Using original JQL only.[/yellow]")
+            return base_jql
+        
+        console.print(f"[dim]   Applying board filter: {board_name}[/dim]")
+        if not base_jql:
+            return board_filter_jql
+        return f"({board_filter_jql}) AND ({base_jql})"
+    
+    @staticmethod
+    def _extract_project_key_from_jql(jql_query: str) -> Optional[str]:
+        """Best-effort extraction of project key from JQL"""
+        pattern = re.compile(r'project\s*=\s*"?([A-Z0-9_-]+)"?', re.IGNORECASE)
+        match = pattern.search(jql_query)
+        if match:
+            return match.group(1)
+        return None
+    
+    def _get_board_filter_jql(self, board_name: str, project_key: Optional[str]) -> Optional[str]:
+        """Fetch board filter JQL using Jira Agile API"""
+        cache_key = board_name.strip().lower()
+        if cache_key in self.board_filter_cache:
+            return self.board_filter_cache[cache_key]
+        
+        try:
+            server = self.jira._options['server']
+            start_at = 0
+            max_results = 50
+            normalized_board = cache_key
+            found_board = None
+            
+            console.print(f"[dim]   Resolving board '{board_name}' via Jira Agile API...[/dim]")
+            while True:
+                params = {
+                    'startAt': start_at,
+                    'maxResults': max_results
+                }
+                if project_key:
+                    params['projectKeyOrId'] = project_key
+                
+                boards_resp = self.jira._session.get(
+                    f"{server}/rest/agile/1.0/board",
+                    params=params
+                )
+                boards_resp.raise_for_status()
+                boards_data = boards_resp.json()
+                
+                for board in boards_data.get('values', []):
+                    if board.get('name', '').strip().lower() == normalized_board:
+                        found_board = board
+                        break
+                
+                if found_board or boards_data.get('isLast', True):
+                    break
+                
+                start_at += max_results
+            
+            if not found_board:
+                console.print(f"[yellow]⚠️  Board '{board_name}' not found (project hint: {project_key}).[/yellow]")
+                return None
+            
+            filter_id = found_board.get('filterId')
+            if not filter_id:
+                console.print(f"[yellow]⚠️  Board '{board_name}' has no filterId.[/yellow]")
+                return None
+            
+            filter_resp = self.jira._session.get(f"{server}/rest/api/3/filter/{filter_id}")
+            filter_resp.raise_for_status()
+            filter_data = filter_resp.json()
+            filter_jql = filter_data.get('jql')
+            if filter_jql:
+                self.board_filter_cache[cache_key] = filter_jql
+            return filter_jql
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Failed to resolve board '{board_name}': {e}[/yellow]")
+            return None
+    
     def list_tickets(
         self,
         project: Optional[str] = None,
@@ -294,13 +381,15 @@ class JiraIntegration:
         assignee: Optional[str] = None,
         priority: Optional[str] = None,
         issue_type: Optional[str] = None,
-        max_results: int = 50
+        max_results: int = 50,
+        board_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         List Jira tickets with filters
         
         Args:
             project: Project key (e.g., 'AUDIT', 'SEC')
+            board_name: Optional Jira board/dashboard name (e.g., 'XDR SRE Sprint')
             labels: List of labels to filter by
             status: Status filter (e.g., 'Open', 'In Progress', 'Done')
             assignee: Assignee username or email
@@ -337,7 +426,10 @@ class JiraIntegration:
             if issue_type:
                 jql_parts.append(f'issuetype = "{issue_type}"')
             
-            jql = ' AND '.join(jql_parts) if jql_parts else 'ORDER BY created DESC'
+            base_jql = ' AND '.join(jql_parts) if jql_parts else ''
+            jql = self._augment_jql_with_board_filter(base_jql, board_name)
+            if not jql:
+                jql = 'ORDER BY created DESC'
             
             console.print(f"[cyan]🔍 Searching Jira with JQL: {jql}[/cyan]")
             
@@ -370,7 +462,13 @@ class JiraIntegration:
             console.print(f"[red]❌ Error listing tickets: {e}[/red]")
             return []
     
-    def search_jql(self, jql_query: str, max_results: int = 1000, paginate: bool = True) -> List[Dict[str, Any]]:
+    def search_jql(
+        self,
+        jql_query: str,
+        max_results: int = 1000,
+        paginate: bool = True,
+        board_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Advanced JQL search with automatic pagination
         
@@ -378,6 +476,7 @@ class JiraIntegration:
             jql_query: JQL query string (e.g., 'project = AUDIT AND status = "In Progress"')
             max_results: Maximum number of results (default 1000, use 0 for all)
             paginate: If True, automatically fetch all results using pagination
+            board_name: Optional board/dashboard name to auto-apply its saved filter
         
         Returns:
             List of ticket dictionaries
@@ -386,6 +485,7 @@ class JiraIntegration:
             return []
         
         try:
+            jql_query = self._augment_jql_with_board_filter(jql_query, board_name)
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
             # Jira API limits to 100 per request, so we need pagination

@@ -730,6 +730,10 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                         "type": "string",
                         "description": "Project key (e.g., 'AUDIT', 'SEC')"
                     },
+                    "board_name": {
+                        "type": "string",
+                        "description": "Optional board/dashboard name (e.g., 'XDR SRE Sprint') to auto-apply that board's filter"
+                    },
                     "labels": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -796,6 +800,10 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                     "paginate": {
                         "type": "boolean",
                         "description": "Enable automatic pagination (default: true)"
+                    },
+                    "board_name": {
+                        "type": "string",
+                        "description": "Optional board/dashboard name (e.g., 'XDR SRE Sprint', 'XDR Platform Ops')"
                     },
                     "export_format": {
                         "type": "string",

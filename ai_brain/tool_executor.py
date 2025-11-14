@@ -1911,7 +1911,8 @@ class ToolExecutor:
                 assignee=params.get('assignee'),
                 priority=params.get('priority'),
                 issue_type=params.get('issue_type'),
-                max_results=params.get('max_results', 50)
+                max_results=params.get('max_results', 50),
+                board_name=params.get('board_name')
             )
             
             # Export if requested
@@ -1944,7 +1945,8 @@ class ToolExecutor:
             tickets = jira.search_jql(
                 jql_query=params.get('jql_query'),
                 max_results=params.get('max_results', 1000),  # Default to 1000 (will paginate)
-                paginate=params.get('paginate', True)  # Enable pagination by default
+                paginate=params.get('paginate', True),  # Enable pagination by default
+                board_name=params.get('board_name')
             )
             analytics = self._summarize_jira_tickets(tickets)
             
