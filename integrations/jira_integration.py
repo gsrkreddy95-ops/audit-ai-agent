@@ -489,7 +489,7 @@ class JiraIntegration:
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
             # Jira API limits to 100 per request, so we need pagination
-            if paginate and (max_results == 0 or max_results > 100):
+            if paginate:
                 tickets = []
                 start_at = 0
                 page_size = 100  # Jira API max per request
@@ -503,12 +503,21 @@ class JiraIntegration:
                     # Fetch a page of results using Jira Cloud's new JQL API
                     try:
                         # NOTE: /search/jql is a POST endpoint with JSON body
+                        # Determine current page size respecting user max_results limit
+                        current_page_size = page_size
+                        if max_results > 0:
+                            remaining = max_results - total_fetched
+                            if remaining <= 0:
+                                console.print(f"[dim]   Already fetched requested max results ({max_results}).[/dim]")
+                                break
+                            current_page_size = min(page_size, remaining)
+                        
                         response = self.jira._session.post(
                             f"{self.jira._options['server']}/rest/api/3/search/jql",
                             json={
                                 'jql': jql_query,
                                 'startAt': start_at,
-                                'maxResults': page_size,
+                                'maxResults': current_page_size,
                                 'fields': ['*all']
                             },
                             headers={'Content-Type': 'application/json'}
@@ -566,8 +575,8 @@ class JiraIntegration:
                     
                     # Check stopping conditions
                     # 1. No more results on this page (most reliable indicator)
-                    if len(page_issues) < page_size:
-                        console.print(f"[dim]   Last page reached (got {len(page_issues)} < {page_size})[/dim]")
+                    if len(page_issues) < current_page_size:
+                        console.print(f"[dim]   Last page reached (got {len(page_issues)} < {current_page_size})[/dim]")
                         break
                     
                     # 2. Reached the total available from Jira (only if total is reliable)
@@ -580,7 +589,7 @@ class JiraIntegration:
                         console.print(f"[dim]   Max results limit reached ({total_fetched}/{max_results})[/dim]")
                         break
                     
-                    start_at += page_size
+                    start_at += current_page_size
                 
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
                 return tickets
