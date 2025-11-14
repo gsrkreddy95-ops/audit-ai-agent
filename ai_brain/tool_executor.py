@@ -21,7 +21,10 @@ from evidence_manager.document_intelligence import DocumentIntelligence
 from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced, ClickStrategy
 from tools.rds_navigator_enhanced import RDSNavigatorEnhanced
 from ai_brain.browser_session_manager import BrowserSessionManager  # ← ADDED FOR aws_console_action
-from tools.aws_export_tool import export_aws_data
+from tools.aws_universal_export import (
+    export_aws_data,  # Universal export (auto-detects best tool)
+    export_all_aws_services  # Export ALL 100+ services
+)
 from tools.aws_list_tool import (
     list_s3_buckets, list_rds_instances, list_rds_clusters,
     list_iam_users, list_ec2_instances, list_lambda_functions, list_vpc_resources

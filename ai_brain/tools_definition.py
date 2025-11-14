@@ -393,37 +393,76 @@ Use this after downloading evidence locally or when SharePoint metadata includes
         
         {
             "name": "aws_export_data",
-            "description": """Exports AWS data to CSV/JSON/XLSX via AWS API (boto3).
+            "description": """🚀 UNIVERSAL AWS Export - Supports 100+ AWS Services!
             
-            This tool:
-            - Uses AWS API (not Console)
-            - Authenticates with duo-sso if needed
-            - Calls AWS API to get resource data
-            - Exports to CSV, JSON, or XLSX format
-            - Adds timestamp to filename
-            - Saves to local evidence folder
+            Exports AWS data to CSV/JSON via AWS API (boto3) with COMPLETE configuration details.
             
-            IMPORTANT: Audit evidence requires PRODUCTION accounts only!
-            Before using this tool, ask user to confirm:
-            - Production account (ctr-prod, sxo101, sxo202)
-            - AWS region
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            🎯 AUTOMATIC TOOL SELECTION (You don't need to choose!)
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            Use this for exporting lists/data like:
-            - IAM users, roles, policies
-            - S3 buckets with configurations
-            - RDS instances/clusters details
-            - EC2 instances with tags
-            - Security groups rules
-            - CloudTrail events
-            - Any structured AWS data
+            For IAM, S3, RDS, EC2:
+            ✅ Uses ENHANCED DETAILED EXPORTER
+            ✅ 17-33 fields per resource
+            ✅ Encryption status, backup config, security settings
+            ✅ Network details, tags, ARNs, metadata
+            
+            For ALL other services (Lambda, DynamoDB, ECS, EKS, etc.):
+            ✅ Uses COMPREHENSIVE COLLECTOR  
+            ✅ 100+ AWS services supported
+            ✅ Complete resource configurations
+            ✅ Automatic API discovery
+            
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            📦 SUPPORTED SERVICES (100+)
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            
+            COMPUTE: ec2, lambda, ecs, eks, batch, lightsail
+            STORAGE: s3, ebs, efs, fsx, backup, glacier
+            DATABASE: rds, dynamodb, redshift, neptune, documentdb, elasticache
+            NETWORKING: vpc, elb, cloudfront, route53, apigateway, directconnect
+            SECURITY: iam, kms, secrets, waf, shield, guardduty, macie
+            MONITORING: cloudwatch, cloudtrail, config, xray
+            ANALYTICS: athena, emr, kinesis, glue, quicksight
+            ML/AI: sagemaker, comprehend, rekognition, textract
+            MESSAGING: sns, sqs, eventbridge, mq
+            DEVELOPER: codecommit, codebuild, codedeploy, codepipeline
+            MANAGEMENT: cloudformation, ssm, organizations, control-tower
+            
+            And 70+ more services!
+            
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            
+            IMPORTANT: Use production accounts for audit evidence!
+            - ctr-prod, sxo101, sxo202 (NOT ctr-int for audit!)
+            
+            AUTHENTICATION:
+            - Automatically uses duo-sso if credentials needed
+            - Works with federated SSO accounts
+            
+            WHAT IT EXPORTS:
+            ✅ Complete resource configurations
+            ✅ Encryption status (ALWAYS included)
+            ✅ Backup configuration (ALWAYS included)  
+            ✅ Security settings (ALWAYS included)
+            ✅ Network/endpoint details (ALWAYS included)
+            ✅ Tags, ARNs, metadata (ALWAYS included)
+            
+            EXAMPLES:
+            - IAM users: MFA status, access keys, policies
+            - S3 buckets: Encryption, versioning, public access blocks
+            - RDS clusters: Backup retention, encryption, endpoints
+            - Lambda functions: Runtime, memory, environment vars
+            - DynamoDB tables: Capacity, encryption, streams
+            - ECS clusters: Services, tasks, container configs
             """,
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "service": {
                         "type": "string",
-                        "description": "AWS service to export from",
-                        "enum": ["iam", "s3", "rds", "ec2", "vpc", "cloudtrail", "config"]
+                        "description": "AWS service to export from (supports 100+ services!)",
+                        "examples": ["iam", "s3", "rds", "ec2", "lambda", "dynamodb", "ecs", "eks", "vpc", "kms", "cloudtrail", "config"]
                     },
                     "export_type": {
                         "type": "string",
