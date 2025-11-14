@@ -185,7 +185,22 @@ class JiraIntegration:
         components = raw_fields.get('components') or []
         ticket['components'] = [comp.get('name') for comp in components if isinstance(comp, dict) and comp.get('name')]
         ticket['due_date'] = raw_fields.get('duedate')
-        return ticket
+        
+        # Sanitize all values to ensure JSON serialization (convert PropertyHolder objects)
+        return self._sanitize_for_json(ticket)
+    
+    @staticmethod
+    def _sanitize_for_json(data: Any) -> Any:
+        """Recursively convert all values to JSON-serializable primitives"""
+        if isinstance(data, dict):
+            return {k: JiraIntegration._sanitize_for_json(v) for k, v in data.items()}
+        elif isinstance(data, list):
+            return [JiraIntegration._sanitize_for_json(item) for item in data]
+        elif isinstance(data, (str, int, float, bool, type(None))):
+            return data
+        else:
+            # Convert any complex objects (like PropertyHolder) to string
+            return str(data)
     
     @staticmethod
     def _get_issue_raw_fields(issue: Any) -> Dict[str, Any]:
@@ -436,7 +451,7 @@ class JiraIntegration:
             # Execute search using new Jira Cloud API (POST method)
             try:
                 response = self.jira._session.post(
-                    f"{self.jira._options['server']}/rest/api/3/search/jql",
+                    f"{self.jira._options['server']}/rest/api/3/search",
                     json={
                         'jql': jql,
                         'maxResults': max_results,
@@ -513,7 +528,7 @@ class JiraIntegration:
                             current_page_size = min(page_size, remaining)
                         
                         response = self.jira._session.post(
-                            f"{self.jira._options['server']}/rest/api/3/search/jql",
+                            f"{self.jira._options['server']}/rest/api/3/search",
                             json={
                                 'jql': jql_query,
                                 'startAt': start_at,
@@ -525,7 +540,7 @@ class JiraIntegration:
                         
                         # DEBUG: Log the request details
                         if start_at == 0:
-                            console.print(f"[dim]   API Request: POST /rest/api/3/search/jql[/dim]")
+                            console.print(f"[dim]   API Request: POST /rest/api/3/search[/dim]")
                             console.print(f"[dim]   JQL: {jql_query}[/dim]")
                         response.raise_for_status()
                         search_results = response.json()
