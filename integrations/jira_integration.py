@@ -39,6 +39,12 @@ class JiraIntegration:
         self.jira_url = jira_url or os.getenv('JIRA_URL')
         self.email = email or os.getenv('JIRA_EMAIL')
         self.api_token = api_token or os.getenv('JIRA_API_TOKEN')
+        self.field_map: Dict[str, str] = {}
+        self.sprint_field_id: Optional[str] = None
+        self.epic_field_id: Optional[str] = None
+        self.story_points_field_id: Optional[str] = None
+        self.team_field_id: Optional[str] = None
+        self._field_map_initialized = False
         
         if not all([self.jira_url, self.email, self.api_token]):
             console.print("[yellow]⚠️  Jira credentials not found in environment![/yellow]")
@@ -53,6 +59,7 @@ class JiraIntegration:
                 basic_auth=(self.email, self.api_token)
             )
             console.print(f"[green]✅ Connected to Jira: {self.jira_url}[/green]")
+            self._initialize_field_map()
         except Exception as e:
             console.print(f"[red]❌ Failed to connect to Jira: {e}[/red]")
             self.jira = None
@@ -63,6 +70,221 @@ class JiraIntegration:
             console.print("[red]❌ Jira not connected! Please check credentials.[/red]")
             return False
         return True
+    
+    def _initialize_field_map(self) -> None:
+        """Fetch Jira field metadata to resolve custom field IDs (sprint, epic, etc.)"""
+        if not self.jira:
+            return
+        if self._field_map_initialized:
+            return
+        
+        try:
+            fields = self.jira.fields()
+            for field in fields:
+                name = (field.get('name') or '').strip().lower()
+                field_id = field.get('id')
+                if name and field_id:
+                    self.field_map[name] = field_id
+            
+            def lookup(possible_names: List[str]) -> Optional[str]:
+                for candidate in possible_names:
+                    field_id = self.field_map.get(candidate.lower())
+                    if field_id:
+                        return field_id
+                return None
+            
+            self.sprint_field_id = lookup(['sprint'])
+            self.epic_field_id = lookup(['epic link', 'epic'])
+            self.story_points_field_id = lookup(['story points', 'story point estimate', 'story points (legacy)'])
+            self.team_field_id = lookup(['team'])
+            
+            console.print("[dim]🧠 Jira field map initialized:"
+                          f" sprint={self.sprint_field_id}, epic={self.epic_field_id},"
+                          f" story_points={self.story_points_field_id}[/dim]")
+            self._field_map_initialized = True
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Could not initialize Jira field map: {e}[/yellow]")
+    
+    def _build_issue_objects(self, search_results: Dict[str, Any]) -> List[Any]:
+        """Create Issue objects while keeping raw payload for advanced parsing"""
+        issues = []
+        for issue_data in search_results.get('issues', []):
+            try:
+                from jira.resources import Issue
+                issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
+                issues.append(issue)
+            except Exception:
+                issues.append(self._create_simple_issue(issue_data))
+        return issues
+    
+    @staticmethod
+    def _create_simple_issue(issue_data: Dict[str, Any]):
+        """Fallback object that mirrors jira.resources.Issue essentials"""
+        class SimpleIssue:
+            def __init__(self, data: Dict[str, Any]):
+                self.raw = data
+                self.key = data.get('key')
+                fields_data = data.get('fields', {})
+                self.fields = type('obj', (object,), {
+                    'summary': fields_data.get('summary', ''),
+                    'status': type('obj', (object,), {'name': fields_data.get('status', {}).get('name', 'Unknown')})(),
+                    'priority': type('obj', (object,), {'name': fields_data.get('priority', {}).get('name', 'None')})() if fields_data.get('priority') else None,
+                    'assignee': type('obj', (object,), {'displayName': fields_data.get('assignee', {}).get('displayName', 'Unassigned')})() if fields_data.get('assignee') else None,
+                    'reporter': type('obj', (object,), {'displayName': fields_data.get('reporter', {}).get('displayName', 'Unknown')})() if fields_data.get('reporter') else None,
+                    'created': fields_data.get('created', ''),
+                    'updated': fields_data.get('updated', ''),
+                    'issuetype': type('obj', (object,), {'name': fields_data.get('issuetype', {}).get('name', 'Unknown')})(),
+                    'labels': fields_data.get('labels', []),
+                    'description': fields_data.get('description', '')
+                })()
+        return SimpleIssue(issue_data)
+    
+    @staticmethod
+    def _serialize_value_for_export(value: Any) -> Any:
+        """Convert complex values to CSV-friendly strings"""
+        if isinstance(value, list):
+            if all(isinstance(item, (str, int, float)) or item is None for item in value):
+                return ', '.join('' if item is None else str(item) for item in value)
+            return json.dumps(value, ensure_ascii=False)
+        if isinstance(value, dict):
+            return json.dumps(value, ensure_ascii=False)
+        return value
+    
+    def _build_ticket_dict(self, issue: Any) -> Dict[str, Any]:
+        """Create normalized ticket dictionary enriched with advanced metadata"""
+        priority_obj = getattr(issue.fields, 'priority', None)
+        assignee_obj = getattr(issue.fields, 'assignee', None)
+        reporter_obj = getattr(issue.fields, 'reporter', None)
+        status_obj = getattr(issue.fields, 'status', None)
+        issue_type_obj = getattr(issue.fields, 'issuetype', None)
+        
+        ticket = {
+            'key': issue.key,
+            'summary': getattr(issue.fields, 'summary', '') or '',
+            'status': getattr(status_obj, 'name', 'Unknown'),
+            'priority': getattr(priority_obj, 'name', 'None') if priority_obj else 'None',
+            'assignee': getattr(assignee_obj, 'displayName', 'Unassigned') if assignee_obj else 'Unassigned',
+            'reporter': getattr(reporter_obj, 'displayName', 'Unknown') if reporter_obj else 'Unknown',
+            'created': str(getattr(issue.fields, 'created', '')),
+            'updated': str(getattr(issue.fields, 'updated', '')),
+            'issue_type': getattr(issue_type_obj, 'name', 'Unknown'),
+            'labels': getattr(issue.fields, 'labels', []) or [],
+            'description': getattr(issue.fields, 'description', '') or '',
+            'url': f"{self.jira_url}/browse/{issue.key}"
+        }
+        
+        raw_fields = self._get_issue_raw_fields(issue)
+        ticket.update(self._extract_advanced_fields(raw_fields))
+        status_data = raw_fields.get('status') or {}
+        status_category = status_data.get('statusCategory') or {}
+        ticket['status_category'] = status_category.get('name')
+        fix_versions = raw_fields.get('fixVersions') or []
+        ticket['fix_versions'] = [fv.get('name') for fv in fix_versions if isinstance(fv, dict) and fv.get('name')]
+        components = raw_fields.get('components') or []
+        ticket['components'] = [comp.get('name') for comp in components if isinstance(comp, dict) and comp.get('name')]
+        ticket['due_date'] = raw_fields.get('duedate')
+        return ticket
+    
+    @staticmethod
+    def _get_issue_raw_fields(issue: Any) -> Dict[str, Any]:
+        """Safely extract raw field payload from Issue or fallback object"""
+        if hasattr(issue, 'raw') and isinstance(issue.raw, dict):
+            return issue.raw.get('fields', {}) or {}
+        return {}
+    
+    def _extract_advanced_fields(self, raw_fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Enrich ticket with sprint, epic, story points, and team info"""
+        enrichment: Dict[str, Any] = {
+            'sprints': [],
+            'current_sprint': None,
+            'current_sprint_name': None,
+            'current_sprint_goal': None,
+            'story_points': None,
+            'epic_link': None,
+            'team': None
+        }
+        
+        # Story points / epic / team
+        if self.story_points_field_id:
+            enrichment['story_points'] = raw_fields.get(self.story_points_field_id)
+        if self.epic_field_id:
+            enrichment['epic_link'] = raw_fields.get(self.epic_field_id)
+        if self.team_field_id:
+            team = raw_fields.get(self.team_field_id)
+            if isinstance(team, dict):
+                enrichment['team'] = team.get('name') or team.get('value')
+            else:
+                enrichment['team'] = team
+        
+        # Sprint parsing
+        sprint_entries = self._get_sprint_entries(raw_fields)
+        enrichment['sprints'] = sprint_entries
+        if sprint_entries:
+            active = next((s for s in sprint_entries if s.get('state') == 'ACTIVE'), None)
+            upcoming = next((s for s in sprint_entries if s.get('state') == 'FUTURE'), None)
+            latest = sprint_entries[-1]
+            chosen = active or upcoming or latest
+            if chosen:
+                enrichment['current_sprint'] = chosen
+                enrichment['current_sprint_name'] = chosen.get('name')
+                enrichment['current_sprint_goal'] = chosen.get('goal')
+        
+        return enrichment
+    
+    def _get_sprint_entries(self, raw_fields: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract structured sprint information from Jira's custom field"""
+        if not self.sprint_field_id:
+            return []
+        
+        sprint_field_value = raw_fields.get(self.sprint_field_id)
+        if not sprint_field_value:
+            return []
+        
+        entries = sprint_field_value if isinstance(sprint_field_value, list) else [sprint_field_value]
+        parsed_entries: List[Dict[str, Any]] = []
+        
+        for entry in entries:
+            parsed = self._parse_single_sprint_entry(entry)
+            if parsed:
+                parsed_entries.append(parsed)
+        
+        parsed_entries.sort(key=lambda s: s.get('startDate') or s.get('endDate') or '')
+        return parsed_entries
+    
+    def _parse_single_sprint_entry(self, entry: Any) -> Dict[str, Any]:
+        """Convert sprint payload to structured dict"""
+        if isinstance(entry, dict):
+            return {
+                'id': entry.get('id'),
+                'name': entry.get('name'),
+                'state': entry.get('state'),
+                'goal': entry.get('goal'),
+                'board_id': entry.get('rapidViewId') or entry.get('originBoardId'),
+                'startDate': entry.get('startDate'),
+                'endDate': entry.get('endDate'),
+                'completeDate': entry.get('completeDate')
+            }
+        
+        if isinstance(entry, str):
+            match_section = entry.split('[', 1)[-1].rstrip(']')
+            kv_pairs = {}
+            for segment in match_section.split(','):
+                if '=' not in segment:
+                    continue
+                key, value = segment.split('=', 1)
+                kv_pairs[key.strip()] = value.strip()
+            return {
+                'id': kv_pairs.get('id'),
+                'name': kv_pairs.get('name'),
+                'state': kv_pairs.get('state'),
+                'goal': kv_pairs.get('goal'),
+                'board_id': kv_pairs.get('rapidViewId'),
+                'startDate': kv_pairs.get('startDate'),
+                'endDate': kv_pairs.get('endDate'),
+                'completeDate': kv_pairs.get('completeDate')
+            }
+        
+        return {}
     
     def list_tickets(
         self,
@@ -133,54 +355,13 @@ class JiraIntegration:
                 response.raise_for_status()
                 search_results = response.json()
                 
-                # Convert raw JSON to Issue objects
-                issues = []
-                for issue_data in search_results.get('issues', []):
-                    try:
-                        from jira.resources import Issue
-                        issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
-                        issues.append(issue)
-                    except Exception:
-                        # Fallback
-                        class SimpleIssue:
-                            def __init__(self, data):
-                                self.key = data.get('key')
-                                self.fields = type('obj', (object,), {
-                                    'summary': data.get('fields', {}).get('summary', ''),
-                                    'status': type('obj', (object,), {'name': data.get('fields', {}).get('status', {}).get('name', 'Unknown')})(),
-                                    'priority': type('obj', (object,), {'name': data.get('fields', {}).get('priority', {}).get('name', 'None')})() if data.get('fields', {}).get('priority') else None,
-                                    'assignee': type('obj', (object,), {'displayName': data.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')})() if data.get('fields', {}).get('assignee') else None,
-                                    'reporter': type('obj', (object,), {'displayName': data.get('fields', {}).get('reporter', {}).get('displayName', 'Unknown')})() if data.get('fields', {}).get('reporter') else None,
-                                    'created': data.get('fields', {}).get('created', ''),
-                                    'updated': data.get('fields', {}).get('updated', ''),
-                                    'issuetype': type('obj', (object,), {'name': data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')})(),
-                                    'labels': data.get('fields', {}).get('labels', []),
-                                    'description': data.get('fields', {}).get('description', '')
-                                })()
-                        issue = SimpleIssue(issue_data)
-                        issues.append(issue)
+                issues = self._build_issue_objects(search_results)
             except Exception as e:
                 console.print(f"[red]❌ Error searching: {e}[/red]")
                 return []
             
             # Format results
-            tickets = []
-            for issue in issues:
-                ticket = {
-                    'key': issue.key,
-                    'summary': issue.fields.summary,
-                    'status': issue.fields.status.name,
-                    'priority': issue.fields.priority.name if issue.fields.priority else 'None',
-                    'assignee': issue.fields.assignee.displayName if issue.fields.assignee else 'Unassigned',
-                    'reporter': issue.fields.reporter.displayName if issue.fields.reporter else 'Unknown',
-                    'created': str(issue.fields.created),
-                    'updated': str(issue.fields.updated),
-                    'issue_type': issue.fields.issuetype.name,
-                    'labels': issue.fields.labels,
-                    'description': issue.fields.description or '',
-                    'url': f"{self.jira_url}/browse/{issue.key}"
-                }
-                tickets.append(ticket)
+            tickets = [self._build_ticket_dict(issue) for issue in issues]
             
             console.print(f"[green]✅ Found {len(tickets)} tickets[/green]")
             return tickets
@@ -263,32 +444,7 @@ class JiraIntegration:
                                     effective_max = max_results
                                 console.print(f"[dim]   Will fetch up to: {effective_max} tickets[/dim]")
                         
-                        # Convert raw JSON to Issue objects (match old API behavior)
-                        page_issues = []
-                        for issue_data in search_results.get('issues', []):
-                            try:
-                                from jira.resources import Issue
-                                issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
-                                page_issues.append(issue)
-                            except Exception:
-                                # Fallback: manually create a simple object
-                                class SimpleIssue:
-                                    def __init__(self, data):
-                                        self.key = data.get('key')
-                                        self.fields = type('obj', (object,), {
-                                            'summary': data.get('fields', {}).get('summary', ''),
-                                            'status': type('obj', (object,), {'name': data.get('fields', {}).get('status', {}).get('name', 'Unknown')})(),
-                                            'priority': type('obj', (object,), {'name': data.get('fields', {}).get('priority', {}).get('name', 'None')})() if data.get('fields', {}).get('priority') else None,
-                                            'assignee': type('obj', (object,), {'displayName': data.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')})() if data.get('fields', {}).get('assignee') else None,
-                                            'reporter': type('obj', (object,), {'displayName': data.get('fields', {}).get('reporter', {}).get('displayName', 'Unknown')})() if data.get('fields', {}).get('reporter') else None,
-                                            'created': data.get('fields', {}).get('created', ''),
-                                            'updated': data.get('fields', {}).get('updated', ''),
-                                            'issuetype': type('obj', (object,), {'name': data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')})(),
-                                            'labels': data.get('fields', {}).get('labels', []),
-                                            'description': data.get('fields', {}).get('description', '')
-                                        })()
-                                issue = SimpleIssue(issue_data)
-                                page_issues.append(issue)
+                        page_issues = self._build_issue_objects(search_results)
                     except Exception as e:
                         console.print(f"[red]❌ Error fetching page: {e}[/red]")
                         raise
@@ -298,19 +454,7 @@ class JiraIntegration:
                     
                     # Process this page
                     for issue in page_issues:
-                        ticket = {
-                            'key': issue.key,
-                            'summary': issue.fields.summary,
-                            'status': issue.fields.status.name,
-                            'priority': issue.fields.priority.name if issue.fields.priority else 'None',
-                            'assignee': issue.fields.assignee.displayName if issue.fields.assignee else 'Unassigned',
-                            'reporter': issue.fields.reporter.displayName if issue.fields.reporter else 'Unknown',
-                            'created': str(issue.fields.created),
-                            'updated': str(issue.fields.updated),
-                            'issue_type': issue.fields.issuetype.name,
-                            'labels': issue.fields.labels,
-                            'url': f"{self.jira_url}/browse/{issue.key}"
-                        }
+                        ticket = self._build_ticket_dict(issue)
                         tickets.append(ticket)
                         total_fetched += 1
                         
@@ -355,52 +499,12 @@ class JiraIntegration:
                     response.raise_for_status()
                     search_results = response.json()
                     
-                    # Convert raw JSON to Issue objects
-                    issues = []
-                    for issue_data in search_results.get('issues', []):
-                        try:
-                            from jira.resources import Issue
-                            issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
-                            issues.append(issue)
-                        except Exception:
-                            # Fallback: manually create a simple object
-                            class SimpleIssue:
-                                def __init__(self, data):
-                                    self.key = data.get('key')
-                                    self.fields = type('obj', (object,), {
-                                        'summary': data.get('fields', {}).get('summary', ''),
-                                        'status': type('obj', (object,), {'name': data.get('fields', {}).get('status', {}).get('name', 'Unknown')})(),
-                                        'priority': type('obj', (object,), {'name': data.get('fields', {}).get('priority', {}).get('name', 'None')})() if data.get('fields', {}).get('priority') else None,
-                                        'assignee': type('obj', (object,), {'displayName': data.get('fields', {}).get('assignee', {}).get('displayName', 'Unassigned')})() if data.get('fields', {}).get('assignee') else None,
-                                        'reporter': type('obj', (object,), {'displayName': data.get('fields', {}).get('reporter', {}).get('displayName', 'Unknown')})() if data.get('fields', {}).get('reporter') else None,
-                                        'created': data.get('fields', {}).get('created', ''),
-                                        'updated': data.get('fields', {}).get('updated', ''),
-                                        'issuetype': type('obj', (object,), {'name': data.get('fields', {}).get('issuetype', {}).get('name', 'Unknown')})(),
-                                        'labels': data.get('fields', {}).get('labels', []),
-                                        'description': data.get('fields', {}).get('description', '')
-                                    })()
-                            issue = SimpleIssue(issue_data)
-                            issues.append(issue)
+                    issues = self._build_issue_objects(search_results)
                 except Exception as e:
                     console.print(f"[red]❌ Error fetching tickets: {e}[/red]")
                     return []
                 
-                tickets = []
-                for issue in issues:
-                    ticket = {
-                        'key': issue.key,
-                        'summary': issue.fields.summary,
-                        'status': issue.fields.status.name,
-                        'priority': issue.fields.priority.name if issue.fields.priority else 'None',
-                        'assignee': issue.fields.assignee.displayName if issue.fields.assignee else 'Unassigned',
-                        'reporter': issue.fields.reporter.displayName if issue.fields.reporter else 'Unknown',
-                        'created': str(issue.fields.created),
-                        'updated': str(issue.fields.updated),
-                        'issue_type': issue.fields.issuetype.name,
-                        'labels': issue.fields.labels,
-                        'url': f"{self.jira_url}/browse/{issue.key}"
-                    }
-                    tickets.append(ticket)
+                tickets = [self._build_ticket_dict(issue) for issue in issues]
                 
                 console.print(f"[green]✅ Found {len(tickets)} tickets[/green]")
                 return tickets
@@ -511,8 +615,7 @@ class JiraIntegration:
                         writer.writeheader()
                         
                         for ticket in tickets:
-                            # Convert lists to strings for CSV
-                            row = {k: (', '.join(v) if isinstance(v, list) else v) for k, v in ticket.items()}
+                            row = {k: self._serialize_value_for_export(v) for k, v in ticket.items()}
                             writer.writerow(row)
                 
                 console.print(f"[green]✅ Exported {len(tickets)} tickets to CSV: {output_path}[/green]")

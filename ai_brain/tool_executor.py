@@ -5,8 +5,9 @@ Tool Executor - Executes tools that Claude decides to call
 import os
 import time  # ← SELF-HEAL FIX: Added for time.sleep() calls
 from dataclasses import asdict
-from typing import Dict, Any
+from typing import Dict, Any, List
 from datetime import datetime
+from collections import Counter
 from rich.console import Console
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -1945,6 +1946,7 @@ class ToolExecutor:
                 max_results=params.get('max_results', 1000),  # Default to 1000 (will paginate)
                 paginate=params.get('paginate', True)  # Enable pagination by default
             )
+            analytics = self._summarize_jira_tickets(tickets)
             
             # Export if requested
             export_format = params.get('export_format')
@@ -1957,7 +1959,8 @@ class ToolExecutor:
                 "result": {
                     "tickets": tickets,
                     "count": len(tickets),
-                    "export_path": export_path
+                    "export_path": export_path,
+                    "analytics": analytics
                 }
             }
         except Exception as e:
@@ -1985,6 +1988,38 @@ class ToolExecutor:
         except Exception as e:
             console.print(f"[red]❌ Jira get ticket failed: {e}[/red]")
             return {"status": "error", "error": str(e)}
+    
+    def _summarize_jira_tickets(self, tickets: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Build quick analytics so LLM responses include richer context"""
+        if not tickets:
+            return {}
+        
+        status_counts = Counter(ticket.get('status', 'Unknown') for ticket in tickets)
+        sprint_counts = Counter(
+            (ticket.get('current_sprint_name') or 'No Sprint') for ticket in tickets
+        )
+        label_counts = Counter(
+            label
+            for ticket in tickets
+            for label in (ticket.get('labels') or [])
+            if label
+        )
+        story_points = [
+            ticket.get('story_points')
+            for ticket in tickets
+            if isinstance(ticket.get('story_points'), (int, float))
+        ]
+        
+        analytics = {
+            "status_breakdown": dict(status_counts.most_common()),
+            "sprint_breakdown": dict(sprint_counts.most_common()),
+            "top_labels": dict(label_counts.most_common(10)),
+            "tickets_with_story_points": len(story_points),
+            "total_story_points": sum(story_points),
+            "avg_story_points": (sum(story_points) / len(story_points)) if story_points else 0
+        }
+        
+        return analytics
     
     # === CONFLUENCE INTEGRATION IMPLEMENTATIONS ===
     def _execute_confluence_search(self, params: Dict) -> Dict:
