@@ -108,15 +108,16 @@ class JiraIntegration:
             console.print(f"[yellow]⚠️  Could not initialize Jira field map: {e}[/yellow]")
     
     def _build_issue_objects(self, search_results: Dict[str, Any]) -> List[Any]:
-        """Create Issue objects while keeping raw payload for advanced parsing"""
+        """
+        Create Issue objects while keeping raw payload for advanced parsing
+        
+        Note: Using SimpleIssue fallback for all issues from /search/jql endpoint
+        because the jira library's Issue class doesn't work reliably with GET responses
+        """
         issues = []
         for issue_data in search_results.get('issues', []):
-            try:
-                from jira.resources import Issue
-                issue = Issue(self.jira._options, self.jira._session, raw=issue_data)
-                issues.append(issue)
-            except Exception:
-                issues.append(self._create_simple_issue(issue_data))
+            # Always use SimpleIssue for reliability with /search/jql GET responses
+            issues.append(self._create_simple_issue(issue_data))
         return issues
     
     @staticmethod
