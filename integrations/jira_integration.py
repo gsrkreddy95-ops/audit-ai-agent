@@ -262,6 +262,26 @@ class JiraIntegration:
             return json.dumps(value, ensure_ascii=False)
         return value
     
+    @staticmethod
+    def _compact_ticket_for_llm(ticket: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Reduce ticket payload size for LLM safety.
+        Keeps essential fields only and drops heavy text like description.
+        """
+        allowed_keys = {
+            'key', 'summary', 'status', 'priority', 'assignee', 'reporter',
+            'created', 'updated', 'labels', 'issue_type', 'url',
+            'fix_versions', 'components', 'due_date', 'status_category'
+        }
+        compacted: Dict[str, Any] = {}
+        for k in allowed_keys:
+            if k in ticket:
+                compacted[k] = ticket[k]
+        # Truncate summary if excessively long
+        if 'summary' in compacted and isinstance(compacted['summary'], str) and len(compacted['summary']) > 300:
+            compacted['summary'] = compacted['summary'][:300] + '…'
+        return compacted
+    
     def _build_ticket_dict(self, issue: Any) -> Dict[str, Any]:
         """Create normalized ticket dictionary enriched with advanced metadata"""
         priority_obj = getattr(issue.fields, 'priority', None)
@@ -281,7 +301,6 @@ class JiraIntegration:
             'updated': str(getattr(issue.fields, 'updated', '')),
             'issue_type': getattr(issue_type_obj, 'name', 'Unknown'),
             'labels': getattr(issue.fields, 'labels', []) or [],
-            'description': getattr(issue.fields, 'description', '') or '',
             'url': f"{self.jira_url}/browse/{issue.key}"
         }
         
@@ -1047,12 +1066,16 @@ class JiraIntegration:
                         end_date=created_range[1]     # type: ignore[index]
                     )
                     sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
+                    # LLM safety: compact ticket payload
+                    sliced_tickets = [self._compact_ticket_for_llm(t) for t in sliced_tickets]
                     console.print(
                         f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]"
                     )
                     return sliced_tickets
                 
                 tickets = self._apply_post_filters(tickets, jql_query)
+                # LLM safety: compact ticket payload
+                tickets = [self._compact_ticket_for_llm(t) for t in tickets]
                 if guard_triggered:
                     console.print(
                         "[yellow]⚠️  Results truncated at 5,000 tickets due to missing created date filter.[/yellow]"
