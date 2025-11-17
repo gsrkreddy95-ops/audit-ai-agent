@@ -110,8 +110,122 @@ class JiraIntegration:
                 board_name=None,
                 _allow_date_slicing=False
             )
+            # If a weekly slice still returns a high count (approaching 1000),
+            # fall back to day-bucketing to ensure accuracy and reduce payloads.
+            if len(slice_tickets) >= 900:
+                console.print(
+                    f"[dim]   Slice {idx}: {len(slice_tickets)} tickets near cap. Switching to day slicing.[/dim]"
+                )
+                slice_tickets = self._fetch_with_day_slices(
+                    condition_jql=condition_jql,
+                    order_clause=order_segment,
+                    week_start=slice_start,
+                    week_end=slice_end
+                )
             aggregated.extend(slice_tickets)
         return aggregated
+
+    def _fetch_with_day_slices(
+        self,
+        condition_jql: str,
+        order_clause: str,
+        week_start: datetime,
+        week_end: datetime
+    ) -> List[Dict[str, Any]]:
+        """Fetch a weekly slice by day to avoid hitting the 1000 cap within a week."""
+        day_slices = self._generate_date_slices(week_start, week_end, slice_days=1)
+        day_results: List[Dict[str, Any]] = []
+        for d_idx, (day_start, day_end) in enumerate(day_slices, start=1):
+            day_jql = (
+                f"({condition_jql}) AND created >= '{day_start.strftime('%Y-%m-%d')}' "
+                f"AND created <= '{day_end.strftime('%Y-%m-%d')}' {order_clause}"
+            )
+            console.print(
+                f"[dim]      📅 Day {d_idx}/{len(day_slices)}: {day_start.strftime('%Y-%m-%d')}[/dim]"
+            )
+            day_tickets = self.search_jql(
+                jql_query=day_jql,
+                max_results=0,
+                paginate=True,
+                board_name=None,
+                _allow_date_slicing=False
+            )
+            day_results.extend(day_tickets)
+        return day_results
+
+    # ---------- Intent to JQL builder ----------
+    @staticmethod
+    def _quote_list(items: Optional[List[str]]) -> Optional[str]:
+        if not items:
+            return None
+        safe = [str(x).strip().replace('"', '\\"') for x in items if str(x).strip()]
+        return ", ".join([f"\"{s}\"" for s in safe]) if safe else None
+
+    def build_jql_from_intent(
+        self,
+        project: Optional[str] = "XDR",
+        labels: Optional[List[str]] = None,
+        created_start: Optional[str] = None,
+        created_end: Optional[str] = None,
+        statuses: Optional[List[str]] = None,
+        assignee: Optional[str] = None,
+        text_contains: Optional[str] = None,
+        order_by: Optional[str] = "created ASC",
+        board_name: Optional[str] = None
+    ) -> str:
+        """
+        Build robust JQL from natural-language style inputs.
+        - Normalizes dates; uses half-open end date if given as inclusive.
+        - Uses labels in ("...") for reliability.
+        - Adds default project when omitted.
+        - Appends ORDER BY (default created ASC).
+        """
+        clauses: List[str] = []
+        if project:
+            clauses.append(f"project = {project}")
+        if labels:
+            quoted = self._quote_list(labels)
+            if quoted:
+                clauses.append(f"labels in ({quoted})")
+        if created_start and created_end:
+            # Prefer half-open end date if provided as YYYY-MM-DD; convert to < next-day
+            try:
+                end_dt = datetime.strptime(created_end, "%Y-%m-%d")
+                end_next = end_dt + timedelta(days=1)
+                clauses.append(f"created >= '{created_start}'")
+                clauses.append(f"created < '{end_next.strftime('%Y-%m-%d')}'")
+            except ValueError:
+                # Fallback to closed interval
+                clauses.append(f"created >= '{created_start}'")
+                clauses.append(f"created <= '{created_end}'")
+        elif created_start:
+            clauses.append(f"created >= '{created_start}'")
+        elif created_end:
+            try:
+                end_dt = datetime.strptime(created_end, "%Y-%m-%d")
+                end_next = end_dt + timedelta(days=1)
+                clauses.append(f"created < '{end_next.strftime('%Y-%m-%d')}'")
+            except ValueError:
+                clauses.append(f"created <= '{created_end}'")
+        if statuses:
+            quoted = self._quote_list(statuses)
+            if quoted:
+                clauses.append(f"status in ({quoted})")
+        if assignee:
+            clauses.append(f'assignee = "{assignee}"')
+        if text_contains:
+            # text ~ operator via text ~ or summary ~; use text ~ for breadth
+            safe_text = text_contains.replace('"', '\\"')
+            clauses.append(f'text ~ "{safe_text}"')
+        base = " AND ".join(clauses) if clauses else ""
+        # Merge board filter if provided
+        if board_name:
+            filter_jql = self._get_board_filter_jql(board_name, self._extract_project_key_from_jql(base))
+            if filter_jql:
+                base = f"({filter_jql}) AND ({base})" if base else filter_jql
+        if order_by:
+            return f"{base} ORDER BY {order_by}"
+        return base
 
     @staticmethod
     def _get_created_range(created_rules: Optional[Dict[str, datetime]]) -> Optional[Tuple[datetime, datetime]]:
