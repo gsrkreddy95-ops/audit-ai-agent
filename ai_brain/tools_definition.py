@@ -64,6 +64,109 @@ def get_tool_definitions(read_only_mode: bool = False) -> List[Dict]:
         },
 
         {
+            "name": "replay_evidence_playbook",
+            "description": """Replays a stored evidence playbook (generated from prior SharePoint evidence) to collect current-year screenshots/exports automatically.
+
+Provide the fiscal year and RFI code (or let fiscal year default to current). Optional overrides allow switching AWS account/region or specifying an audit period for date filtering.
+
+Use this after building playbooks so the agent can regenerate all proof artifacts in one run.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "fiscal_year": {
+                        "type": "string",
+                        "description": "Fiscal year of the playbook (e.g., 'FY2024'). Defaults to current year."
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "RFI/control identifier whose playbook should be replayed."
+                    },
+                    "aws_account": {
+                        "type": "string",
+                        "description": "Override AWS profile/account for this run."
+                    },
+                    "aws_region": {
+                        "type": "string",
+                        "description": "Override AWS region for this run."
+                    },
+                    "audit_period": {
+                        "type": "string",
+                        "description": "Optional audit period label (e.g., 'FY2025', 'Q1-2025') to use for filtering."
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date override for date filtering (YYYY-MM-DD)."
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date override for date filtering (YYYY-MM-DD)."
+                    }
+                },
+                "required": ["rfi_code"]
+            }
+        },
+
+        {
+            "name": "bulk_aws_export",
+            "description": """Runs multiple aws_export_data operations for a list of AWS services and regions in one request.
+
+Provide services like ["rds","s3","kms"] and regions ["us-east-1","eu-west-1"]. The tool automatically selects sensible export types (clusters, buckets, keys, etc.) if you don’t specify one, and aggregates successes/failures so the agent doesn’t stop at the first error.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "services": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of AWS services to export (e.g., ['rds','s3','kms']). Comma-separated string also supported."
+                    },
+                    "aws_regions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "AWS regions to collect from (e.g., ['us-east-1','eu-west-1'])."
+                    },
+                    "aws_account": {
+                        "type": "string",
+                        "description": "AWS account/profile to use (e.g., 'ctr-prod')."
+                    },
+                    "format": {
+                        "type": "string",
+                        "enum": ["csv", "json"],
+                        "description": "Export format (default: csv)."
+                    },
+                    "export_type": {
+                        "type": "string",
+                        "description": "Optional override export_type (applied to all services)."
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Optional RFI code for evidence storage (default: AUDIT-EXPORT)."
+                    },
+                    "filter_by_date": {
+                        "type": "boolean",
+                        "description": "Enable date filtering (requires audit_period or start/end dates)."
+                    },
+                    "audit_period": {
+                        "type": "string",
+                        "description": "Audit period label (e.g., 'FY2025', 'Q1-2025')."
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Custom range start date (YYYY-MM-DD)."
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "Custom range end date (YYYY-MM-DD)."
+                    },
+                    "date_field": {
+                        "type": "string",
+                        "description": "Specific date column to filter by (falls back to service defaults)."
+                    }
+                },
+                "required": ["services", "aws_regions", "aws_account"]
+            }
+        },
+
+        {
             "name": "analyze_document_evidence",
             "description": """Deeply analyze evidence documents (PDF, DOCX, CSV, JSON, images) using the LLM brain.
 
@@ -112,45 +215,57 @@ Use this after downloading evidence locally or when SharePoint metadata includes
 
         {
             "name": "aws_console_action",
-            "description": """🎯 AWS CONSOLE - Universal tool for ALL AWS Console actions.
+            "description": """🎯 AWS CONSOLE - Universal tool for BROWSER-BASED AWS Console actions.
             
-            This ONE tool handles:
-            1. 🔐 Authentication (sign in / login to AWS account)
-            2. 🧭 Navigation (go to service/section)
-            3. 📸 Screenshots (capture evidence when requested)
-            4. 📊 Exports (CSV, JSON, PDF when requested)
-            5. 🔍 Viewing (just browse, no capture)
-            6. 🔄 Pagination (capture all pages)
-            7. 📅 Filtering (by date/audit period)
+            ⚠️⚠️⚠️ CRITICAL: ONLY USE THIS TOOL FOR SCREENSHOTS! ⚠️⚠️⚠️
             
-            ⚠️  CRITICAL USAGE RULES:
-            - If user says "sign in", "login", "authenticate" → Use this tool with service="console" or service="" (just login)
-            - If user says "go to", "navigate to", "open" → Set capture_screenshot=false (just navigate)
-            - If user says "screenshot", "capture", "document" → Set capture_screenshot=true (navigate + capture)
-            - If user says "export" → Set export_format (CSV/JSON/PDF)
-            - DO NOT use list_aws_resources for "sign in" or "login" requests!
+            This tool opens a BROWSER and requires visual interaction.
+            
+            ✅ USE aws_console_action FOR:
+            - Taking SCREENSHOTS of AWS Console pages
+            - Capturing VISUAL evidence from AWS Console UI
+            - Documenting console configurations visually
+            
+            ❌ DO NOT USE aws_console_action FOR:
+            - Exporting CSV/JSON data → Use aws_export_data instead (no browser needed!)
+            - Listing resources → Use list_aws_resources instead (no browser needed!)
+            - Just "signing in" before an export → Skip! aws_export_data uses AWS CLI credentials directly
+            
+            🔑 KEY RULE:
+            If user says "sign in and export" or "authenticate and export CSV/JSON":
+            → SKIP aws_console_action entirely
+            → Go DIRECTLY to aws_export_data (it handles authentication via AWS CLI/boto3)
+            
+            This tool handles:
+            1. 📸 Screenshots (capture evidence when requested)
+            2. 🧭 Navigation (go to service/section for screenshots)
+            3. 🔄 Pagination (capture all pages visually)
+            4. 📅 Filtering (by date/audit period for visual evidence)
+            
+            ⚠️  USAGE RULES:
+            - If user says "screenshot", "capture", "document", "show me" → Use this tool with capture_screenshot=true
+            - If user says "export CSV" or "export JSON" → DO NOT use this tool! Use aws_export_data instead
+            - If user says "list resources" → DO NOT use this tool! Use list_aws_resources instead
+            - DO NOT use this for authentication before API-based exports!
             
             EXAMPLES:
             
-            Example 0 - Sign In / Login Only:
-            User: "sign into ctr-int us-east-1" OR "login to ctr-int"
-            → service="console", capture_screenshot=false (JUST LOGIN!)
-            
-            Example 1 - Navigation Only:
-            User: "go to Bedrock console in ctr-int us-east-1"
-            → capture_screenshot=false (JUST NAVIGATE!)
-            
-            Example 2 - Navigation + Screenshot:
+            Example 1 - CORRECT: Screenshot Request:
             User: "take screenshot of KMS keys in ctr-prod us-east-1"
-            → capture_screenshot=true (NAVIGATE + CAPTURE!)
+            → Use aws_console_action with capture_screenshot=true
             
-            Example 3 - Navigation + Export:
-            User: "export all S3 buckets to CSV"
-            → export_format="csv" (NAVIGATE + EXPORT!)
+            Example 2 - WRONG: Export Request:
+            User: "export KMS keys to CSV from ctr-prod"
+            → DO NOT use aws_console_action! Use aws_export_data instead
             
-            Example 4 - Just Browse:
-            User: "show me what's in RDS console"
-            → capture_screenshot=false (JUST SHOW!)
+            Example 3 - WRONG: "Sign in and export":
+            User: "sign into ctr-int and export secrets to CSV"
+            → DO NOT use aws_console_action at all!
+            → Go directly to aws_export_data (handles auth internally)
+            
+            Example 4 - CORRECT: Visual Documentation:
+            User: "show me the RDS backup configuration for prod-cluster"
+            → Use aws_console_action with capture_screenshot=true
             
             This tool:
             - Opens AWS Console in browser (persistent session)
@@ -421,7 +536,7 @@ Use this after downloading evidence locally or when SharePoint metadata includes
             STORAGE: s3, ebs, efs, fsx, backup, glacier
             DATABASE: rds, dynamodb, redshift, neptune, documentdb, elasticache
             NETWORKING: vpc, elb, cloudfront, route53, apigateway, directconnect
-            SECURITY: iam, kms, secrets, waf, shield, guardduty, macie
+            SECURITY: iam, kms, secretsmanager, waf, shield, guardduty, macie
             MONITORING: cloudwatch, cloudtrail, config, xray
             ANALYTICS: athena, emr, kinesis, glue, quicksight
             ML/AI: sagemaker, comprehend, rekognition, textract
@@ -433,8 +548,9 @@ Use this after downloading evidence locally or when SharePoint metadata includes
             
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             
-            IMPORTANT: Use production accounts for audit evidence!
-            - ctr-prod, sxo101, sxo202 (NOT ctr-int for audit!)
+            IMPORTANT: Default to production accounts for audit evidence (ctr-prod, sxo101, sxo202).
+            ✅ HOWEVER: If the user explicitly says to use ctr-int/ctr-test/non-prod for testing or experiments,
+              honor that immediately without re-confirming over and over. Assume they understand the risk.
             
             AUTHENTICATION:
             - Automatically uses duo-sso if credentials needed
@@ -461,19 +577,69 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                 "properties": {
                     "service": {
                         "type": "string",
-                        "description": "AWS service to export from (supports 100+ services!)",
-                        "examples": ["iam", "s3", "rds", "ec2", "lambda", "dynamodb", "ecs", "eks", "vpc", "kms", "cloudtrail", "config"]
+                        "description": """AWS service to export from (supports 100+ services!)
+                        
+CRITICAL SERVICE NAMES (use exact strings):
+- IAM: "iam"
+- S3: "s3"  
+- RDS: "rds"
+- EC2: "ec2"
+- KMS (Key Management): "kms"
+- Secrets Manager: "secretsmanager" ⚠️ NOT "secrets"
+- Lambda: "lambda"
+- DynamoDB: "dynamodb"
+- ECS: "ecs"
+- Auto Scaling: "autoscaling"
+- CloudTrail: "cloudtrail"
+- Config: "config"
+
+If the user says "secrets manager" or "secrets", use "secretsmanager".""",
+                        "examples": ["iam", "s3", "rds", "ec2", "lambda", "dynamodb", "ecs", "eks", "vpc", "kms", "secretsmanager", "autoscaling", "cloudtrail", "config"]
                     },
                     "export_type": {
                         "type": "string",
-                        "description": "What data to export",
-                        "examples": ["users", "roles", "buckets", "instances", "clusters", "security-groups", "events"]
+                        "description": """What data to export (resource type within the service)
+
+Common export types by service:
+- iam: "users", "roles", "policies", "groups"
+- s3: "buckets"
+- rds: "clusters", "instances", "snapshots"
+- ec2: "instances", "volumes", "security-groups", "vpcs"
+- kms: "keys", "aliases"
+- secretsmanager: "secrets" ⚠️ (the export_type is "secrets", but service is "secretsmanager")
+- lambda: "functions"
+- dynamodb: "tables"
+- autoscaling: "groups", "policies"
+- cloudtrail: "trails", "events"
+
+If unsure, use "all" to export all available resource types.""",
+                        "examples": ["users", "roles", "buckets", "instances", "clusters", "keys", "secrets", "functions", "tables", "groups", "trails", "all"]
                     },
                     "format": {
                         "type": "string",
                         "description": "Output format",
                         "enum": ["csv", "json", "xlsx"],
                         "default": "csv"
+                    },
+                    "filter_by_date": {
+                        "type": "boolean",
+                        "description": "Set true to filter results within a specific date range."
+                    },
+                    "audit_period": {
+                        "type": "string",
+                        "description": "Optional label describing the audit period (e.g., 'FY2025')."
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date for filtering (YYYY-MM-DD or ISO8601)."
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date for filtering (YYYY-MM-DD or ISO8601)."
+                    },
+                    "date_field": {
+                        "type": "string",
+                        "description": "Override the date field to filter on (defaults per service/resource)."
                     },
                     "aws_account": {
                         "type": "string",
@@ -638,6 +804,46 @@ Use this after downloading evidence locally or when SharePoint metadata includes
                     }
                 },
                 "required": ["sharepoint_url", "rfi_code"]
+            }
+        }
+        ,
+        {
+            "name": "list_pending_enhancements",
+            "description": """Lists all enhancement proposals generated by Meta-Intelligence that are waiting for human approval.
+
+Use this immediately after the agent reports a pending fix so you can review:
+- Why the fix is needed
+- Which files/operations are proposed
+- Suggested test plan
+
+Call this tool before approving or rejecting a fix so you understand the exact code changes.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "applied"],
+                        "description": "Filter by status. Default: pending"
+                    }
+                },
+                "required": []
+            }
+        },
+        {
+            "name": "apply_pending_enhancement",
+            "description": """Applies an auto-generated fix AFTER you explicitly approve it in chat.
+
+Provide the proposal_id returned by list_pending_enhancements or from the tool result that reported the failure.
+The enhancement manager will apply the patch (search/replace/create) and return success/failure details.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "proposal_id": {
+                        "type": "string",
+                        "description": "ID of the enhancement proposal to apply (e.g., 'd2b6f8d4-...')"
+                    }
+                },
+                "required": ["proposal_id"]
             }
         }
     ]
@@ -814,8 +1020,9 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
             
             ✨ PAGINATION: Automatically fetches ALL matching tickets across multiple pages!
             - Jira API limits to 100 per request
-            - This tool automatically paginate to get ALL results (up to max_results)
-            - Use max_results=0 to fetch ALL tickets (no limit)
+            - This tool automatically paginates to get ALL results that match your JQL
+            - By default, fetches ALL tickets (no artificial limit)
+            - Set max_results only if you need a hard cap
             
             Use this for complex queries like:
             - 'project = AUDIT AND status = "In Progress" AND priority = High'
@@ -834,7 +1041,7 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                     },
                     "max_results": {
                         "type": "integer",
-                        "description": "Maximum number of results (default: 1000, use 0 for ALL)"
+                        "description": "Maximum number of results (default: 0 = fetch ALL matching tickets). Only set this if you need a hard cap (e.g., 100, 500). Leave unset or use 0 for complete results."
                     },
                     "paginate": {
                         "type": "boolean",
@@ -1152,6 +1359,8 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
         }
     ]
     
+    approval_locked_tools = {"apply_pending_enhancement"}
+
     # Self-healing/debugging tools that allow Claude to fix code autonomously
     self_healing_tools = get_self_healing_tools()
     
@@ -1186,8 +1395,11 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
             ]
         ]
         
+        filtered_core_tools = [
+            tool for tool in core_tools if tool['name'] not in approval_locked_tools
+        ]
         # Combine with FILTERED tools (READ-ONLY)
-        all_tools = read_only_dynamic + orchestrator_tools + core_tools + read_only_self_healing + read_only_code_gen
+        all_tools = read_only_dynamic + orchestrator_tools + filtered_core_tools + read_only_self_healing + read_only_code_gen
         
         # Add notice to console
         from rich.console import Console

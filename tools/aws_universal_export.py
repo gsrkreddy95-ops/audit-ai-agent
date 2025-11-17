@@ -16,8 +16,32 @@ from tools.aws_comprehensive_audit_collector import (
     AWSComprehensiveAuditCollector,
     collect_comprehensive_audit_evidence
 )
+from tools.aws_export_filters import resolve_date_range, filter_records_by_date
 
 console = Console()
+
+DATE_FIELD_DEFAULTS = {
+    'rds': {
+        'instances': 'InstanceCreateTime',
+        'clusters': 'ClusterCreateTime'
+    },
+    's3': {
+        'buckets': 'CreationDate'
+    },
+    'ec2': {
+        'instances': 'LaunchTime'
+    },
+    'secretsmanager': {
+        'secrets': 'CreatedDate'
+    },
+    'autoscaling': {
+        'auto_scaling_groups': 'CreatedTime'
+    },
+    'kms': {
+        'keys': 'CreationDate',
+        'aliases': 'CreationDate'
+    }
+}
 
 
 def export_aws_universal(
@@ -27,7 +51,12 @@ def export_aws_universal(
     aws_account: str,
     aws_region: str,
     output_path: str,
-    use_comprehensive: bool = None
+    use_comprehensive: bool = None,
+    filter_by_date: bool = False,
+    audit_period: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    date_field: Optional[str] = None
 ) -> bool:
     """
     Universal AWS export function - automatically chooses best tool
@@ -86,6 +115,18 @@ def export_aws_universal(
             return False
         
         # Export single service data
+        start_dt, end_dt, _ = resolve_date_range(filter_by_date, start_date, end_date, audit_period)
+        if start_dt and end_dt:
+            target_field = date_field or DATE_FIELD_DEFAULTS.get(service, {}).get(export_type)
+            if target_field and export_type in all_data.get(service, {}):
+                filtered = filter_records_by_date(
+                    all_data[service][export_type],
+                    target_field,
+                    start_dt,
+                    end_dt
+                )
+                all_data[service][export_type] = filtered
+
         if format == 'csv':
             files = collector.export_to_csv({service: all_data[service]}, os.path.dirname(output_path))
             if files:
@@ -109,7 +150,12 @@ def export_aws_universal(
             format=format,
             aws_account=aws_account,
             aws_region=aws_region,
-            output_path=output_path
+            output_path=output_path,
+            filter_by_date=filter_by_date,
+            audit_period=audit_period,
+            start_date=start_date,
+            end_date=end_date,
+            date_field=date_field
         )
 
 
@@ -120,7 +166,12 @@ def export_aws_data(
     format: str,
     aws_account: str,
     aws_region: str,
-    output_path: str
+    output_path: str,
+    filter_by_date: bool = False,
+    audit_period: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    date_field: Optional[str] = None
 ) -> bool:
     """
     Backward compatible export function
@@ -133,7 +184,12 @@ def export_aws_data(
         aws_account=aws_account,
         aws_region=aws_region,
         output_path=output_path,
-        use_comprehensive=None  # Auto-detect
+        use_comprehensive=None,  # Auto-detect
+        filter_by_date=filter_by_date,
+        audit_period=audit_period,
+        start_date=start_date,
+        end_date=end_date,
+        date_field=date_field
     )
 
 

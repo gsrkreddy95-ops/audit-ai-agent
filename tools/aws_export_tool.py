@@ -15,7 +15,26 @@ from botocore.exceptions import ClientError, NoCredentialsError
 import pandas as pd
 from rich.console import Console
 
+from tools.aws_export_filters import resolve_date_range, filter_records_by_date
+
 console = Console()
+
+DATE_FIELD_DEFAULTS = {
+    'iam': {
+        'users': 'CreateDate',
+        'roles': 'CreateDate'
+    },
+    's3': {
+        'buckets': 'CreationDate'
+    },
+    'rds': {
+        'instances': 'InstanceCreateTime',
+        'clusters': 'ClusterCreateTime'
+    },
+    'ec2': {
+        'instances': 'LaunchTime'
+    }
+}
 
 
 class AWSExportToolEnhanced:
@@ -695,7 +714,12 @@ def export_aws_data(
     format: str,
     aws_account: str,
     aws_region: str,
-    output_path: str
+    output_path: str,
+    filter_by_date: bool = False,
+    audit_period: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    date_field: Optional[str] = None
 ) -> bool:
     """
     High-level function to export AWS data with COMPLETE configuration details
@@ -724,6 +748,7 @@ def export_aws_data(
         os.environ['AWS_PROFILE'] = aws_account
     
     exporter = AWSExportToolEnhanced(aws_profile=aws_account, region=aws_region)
+    start_dt, end_dt, range_label = resolve_date_range(filter_by_date, start_date, end_date, audit_period)
     
     # Get data based on service and export type
     data = []
@@ -748,9 +773,22 @@ def export_aws_data(
         if export_type in ['instances', 'instance']:
             data = exporter.export_ec2_instances()
     
+    if start_dt and end_dt:
+        inferred_field = date_field or DATE_FIELD_DEFAULTS.get(service, {}).get(export_type)
+        if inferred_field:
+            data = filter_records_by_date(data, inferred_field, start_dt, end_dt)
+        else:
+            console.print(
+                f"[yellow]⚠️  No default date field for {service}/{export_type}; skipping date filter.[/yellow]"
+            )
+    
     if not data:
-        context = (f"No {service.upper()} {export_type} resources found in region "
-                   f"{aws_region} for account {aws_account}")
+        context = (
+            f"No {service.upper()} {export_type} resources found in region "
+            f"{aws_region} for account {aws_account}"
+        )
+        if start_dt and end_dt:
+            context += f" within {range_label}"
         console.print(f"[yellow]⚠️  {context}[/yellow]")
         
         # Create placeholder evidence file instead of failing

@@ -5,9 +5,10 @@ Tool Executor - Executes tools that Claude decides to call
 import os
 import time  # ← SELF-HEAL FIX: Added for time.sleep() calls
 from dataclasses import asdict
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from collections import Counter
+from pathlib import Path
 from rich.console import Console
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -18,6 +19,8 @@ from evidence_manager.evidence_analyzer_v2 import EvidenceAnalyzerV2
 from evidence_manager.llm_evidence_analyzer import LLMEvidenceAnalyzer
 from evidence_manager.sharepoint_evidence_learner import SharePointEvidenceLearner
 from evidence_manager.document_intelligence import DocumentIntelligence
+from evidence_manager.playbook_builder import EvidencePlaybookBuilder
+from evidence_manager.playbook_replayer import EvidencePlaybookReplayer
 from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced, ClickStrategy
 from tools.rds_navigator_enhanced import RDSNavigatorEnhanced
 from ai_brain.browser_session_manager import BrowserSessionManager  # ← ADDED FOR aws_console_action
@@ -33,6 +36,7 @@ from tools.sharepoint_upload_tool import upload_to_sharepoint, batch_upload_from
 from ai_brain.universal_intelligence import UniversalIntelligence
 from ai_brain.intelligent_tools import IntelligentFileExporter, IntelligentAWSCLI, IntelligentEvidenceCollector
 from ai_brain.orchestrator import AIOrchestrator
+from ai_brain.meta_intelligence import MetaIntelligence, MultiDimensionalCoordinator
 
 console = Console()
 
@@ -53,11 +57,20 @@ class ToolExecutor:
         self.sharepoint = None
         self.llm = llm
         self.document_intelligence = DocumentIntelligence(llm)
+        self.meta_intelligence = None
+        self.multi_dim_coordinator = None
+        self.current_request: Optional[str] = None
         # Reusable AWS browser session (UniversalScreenshotEnhanced) for non-RDS services
         self._aws_universal_session = None
         self._aws_session_account = None
         self._aws_session_region = None
         
+        self.repo_root = Path(__file__).resolve().parents[1]
+        playbook_dir = self.repo_root / "evidence_playbooks"
+        report_dir = self.repo_root / "playbook_reports"
+        self.playbook_builder = EvidencePlaybookBuilder(playbook_dir)
+        self.playbook_replayer = EvidencePlaybookReplayer(self, self.playbook_builder, report_dir)
+
         # Initialize Universal Intelligence Hub
         if llm:
             console.print("[cyan]🧠 Initializing AI Brain Orchestrator...[/cyan]")
@@ -78,6 +91,15 @@ class ToolExecutor:
             self.aws_cli = IntelligentAWSCLI(self.intelligence)
             self.evidence_collector = IntelligentEvidenceCollector(self.intelligence)
             
+            # Activate Meta-Intelligence layer (self-evolving brain)
+            self.meta_intelligence = MetaIntelligence(
+                llm=llm,
+                tool_executor=self,
+                orchestrator=self.orchestrator
+            )
+            self.multi_dim_coordinator = MultiDimensionalCoordinator(self.meta_intelligence)
+            self.enhancement_manager = self.meta_intelligence.enhancement_manager
+            
             # Use LLM-powered analyzer
             console.print("[cyan]✅ Using LLM-powered evidence analyzer (Claude)[/cyan]")
             self.analyzer = LLMEvidenceAnalyzer(llm)
@@ -91,8 +113,32 @@ class ToolExecutor:
             self.evidence_collector = None
             self.analyzer = EvidenceAnalyzerV2()
             self.learner = None
+            self.meta_intelligence = None
+            self.multi_dim_coordinator = None
+            self.playbook_builder = EvidencePlaybookBuilder(playbook_dir)
+            self.playbook_replayer = EvidencePlaybookReplayer(self, self.playbook_builder, report_dir)
+            self.enhancement_manager = None
+    
+    def set_current_request(self, request: str):
+        """Track the latest user request for meta-intelligence context."""
+        self.current_request = request
     
     def execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Public entry point for tool execution. When Meta-Intelligence is active,
+        all tool calls are routed through the self-evolving layer for analysis,
+        gap detection, retries, and self-healing orchestration.
+        """
+        if self.meta_intelligence and self.current_request:
+            return self.meta_intelligence.execute_with_meta_intelligence(
+                user_request=self.current_request,
+                tool_name=tool_name,
+                tool_params=tool_input,
+                execute_callback=self._execute_tool_direct
+            )
+        return self._execute_tool_direct(tool_name, tool_input)
+    
+    def _execute_tool_direct(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a tool and return results
         
@@ -153,6 +199,18 @@ class ToolExecutor:
             
             elif tool_name == "test_tool":
                 return self._execute_test_tool(tool_input)
+
+            elif tool_name == "list_pending_enhancements":
+                return self._execute_list_pending_enhancements(tool_input)
+
+            elif tool_name == "apply_pending_enhancement":
+                return self._execute_apply_pending_enhancement(tool_input)
+
+            elif tool_name == "replay_evidence_playbook":
+                return self._execute_replay_evidence_playbook(tool_input)
+
+            elif tool_name == "bulk_aws_export":
+                return self._execute_bulk_aws_export(tool_input)
             
             elif tool_name == "get_browser_screenshot":
                 return self._execute_browser_screenshot(tool_input)
@@ -1073,75 +1131,155 @@ class ToolExecutor:
             }
     
     def _execute_aws_export(self, params: Dict) -> Dict:
-        """Execute AWS data export"""
+        """Execute AWS data export (supports multi-region)."""
         try:
             service = params.get('service')
             export_type = params.get('export_type')
             format_type = params.get('format', 'csv')
             account = params.get('aws_account')
-            region = params.get('aws_region')
+            region_input = params.get('aws_region')
             rfi_code = params.get('rfi_code', 'unknown')
             
-            if not all([service, export_type, account, region]):
+            if not all([service, export_type, account, region_input]):
                 return {
                     "status": "error",
                     "error": "Missing required parameters: service, export_type, aws_account, aws_region"
                 }
             
-            # Create output filename
+            region_list = self._normalize_region_input(region_input)
+            if not region_list:
+                return {
+                    "status": "error",
+                    "error": "No valid AWS regions provided."
+                }
+            
+            filter_by_date = params.get("filter_by_date")
+            audit_period = params.get("audit_period")
+            start_date = params.get("start_date")
+            end_date = params.get("end_date")
+            date_field = params.get("date_field")
+            
+            # Auto-fill end_date if missing but start_date provided (assume "till today")
+            if filter_by_date and start_date and not end_date:
+                from datetime import datetime
+                end_date = datetime.now().strftime('%Y-%m-%d')
+                console.print(f"[yellow]ℹ️  Auto-filled end_date: {end_date} (till today)[/yellow]")
+            
+            if filter_by_date and not (audit_period or (start_date and end_date)):
+                return {
+                    "status": "error",
+                    "error": "filter_by_date requires either audit_period or start/end dates"
+                }
+            
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{service}_{export_type}_{region}_{timestamp}.{format_type}"
-            
-            # Get RFI directory
             rfi_dir = self.evidence_manager.get_rfi_directory(rfi_code)
-            output_path = str(rfi_dir / filename)
             
-            console.print(f"\n[cyan]📊 Exporting AWS data...[/cyan]")
-            console.print(f"[cyan]   Service: {service.upper()}[/cyan]")
-            console.print(f"[cyan]   Export Type: {export_type}[/cyan]")
-            console.print(f"[cyan]   Account: {account}[/cyan]")
-            console.print(f"[cyan]   Region: {region}[/cyan]")
-            console.print(f"[cyan]   Format: {format_type.upper()}[/cyan]")
-            console.print(f"[cyan]   Output: {filename}[/cyan]\n")
+            successes = []
+            failures = []
             
-            # Export data
-            success = export_aws_data(
-                service=service,
-                export_type=export_type,
-                format=format_type,
-                aws_account=account,
-                aws_region=region,
-                output_path=output_path
-            )
-            
-            if success:
-                # Track in evidence manager
-                with open(output_path, 'rb') as f:
-                    file_content = f.read()
+            for region in region_list:
+                target_dir = rfi_dir / f"{service}_{export_type}_{region}_{timestamp}"
+                target_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{service}_{export_type}_{region}_{timestamp}.{format_type}"
+                output_path = str(target_dir / filename)
+                pre_existing = {p.name for p in rfi_dir.iterdir() if p.is_file()}
                 
-                self.evidence_manager.save_evidence(
-                    file_content=file_content,
-                    file_name=filename,
-                    rfi_code=rfi_code
+                console.print(f"\n[cyan]📊 Exporting AWS data...[/cyan]")
+                console.print(f"[cyan]   Service: {service.upper()}[/cyan]")
+                console.print(f"[cyan]   Export Type: {export_type}[/cyan]")
+                console.print(f"[cyan]   Account: {account}[/cyan]")
+                console.print(f"[cyan]   Region: {region}[/cyan]")
+                console.print(f"[cyan]   Format: {format_type.upper()}[/cyan]")
+                console.print(f"[cyan]   Output: {filename}[/cyan]\n")
+                if filter_by_date:
+                    console.print(f"[cyan]   Date Filter: {audit_period or f'{start_date} to {end_date}'}[/cyan]")
+                
+                export_result = export_aws_data(
+                    service=service,
+                    export_type=export_type,
+                    format=format_type,
+                    aws_account=account,
+                    aws_region=region,
+                    output_path=output_path,
+                    filter_by_date=filter_by_date,
+                    audit_period=audit_period,
+                    start_date=start_date,
+                    end_date=end_date,
+                    date_field=date_field
                 )
                 
+                success = False
+                new_files: List[str] = []
+                error_message = "Data export failed. Check output for details."
+                if isinstance(export_result, dict):
+                    success = export_result.get("success", False)
+                    new_files.extend(export_result.get("files", []))
+                    error_message = export_result.get("message", error_message)
+                else:
+                    success = bool(export_result)
+                
+                if success:
+                    discovered = [
+                        str(p)
+                        for p in target_dir.iterdir()
+                        if p.is_file()
+                    ]
+                    for file_path in discovered:
+                        if file_path not in new_files:
+                            new_files.append(file_path)
+                
+                if success and new_files:
+                    saved_files = []
+                    for file_path in new_files:
+                        try:
+                            with open(file_path, 'rb') as f:
+                                file_content = f.read()
+                            saved, saved_path, _ = self.evidence_manager.save_evidence(
+                                file_content=file_content,
+                                file_name=Path(file_path).name,
+                                rfi_code=rfi_code
+                            )
+                            if saved:
+                                saved_files.append(saved_path)
+                            try:
+                                Path(file_path).unlink()
+                            except OSError:
+                                pass
+                        except Exception as save_err:
+                            console.print(f"[red]❌ Failed to store evidence {file_path}: {save_err}[/red]")
+                    try:
+                        if not any(target_dir.iterdir()):
+                            target_dir.rmdir()
+                    except OSError:
+                        pass
+                    successes.append({
+                        "region": region,
+                        "files": saved_files,
+                        "timestamp": timestamp
+                    })
+                else:
+                    failures.append({
+                        "region": region,
+                        "error": error_message
+                    })
+            
+            if successes:
                 return {
                     "status": "success",
                     "result": {
-                        "message": f"Data exported successfully",
-                        "filename": filename,
-                        "output_path": output_path,
+                        "message": f"Data exported for {len(successes)} region(s)",
                         "service": service,
                         "export_type": export_type,
                         "format": format_type,
-                        "timestamp": timestamp
+                        "exports": successes,
+                        "failures": failures
                     }
                 }
-            else:
-                return {
-                    "status": "error",
-                    "error": "Data export failed. Check output for details."
-                }
+            
+            return {
+                "status": "error",
+                "error": "; ".join(f"{f['region']}: {f['error']}" for f in failures) or "Export failed for all regions."
+            }
         
         except Exception as e:
             console.print(f"[red]❌ Export error: {e}[/red]")
@@ -1217,6 +1355,49 @@ class ToolExecutor:
                 "status": "error",
                 "error": f"List failed: {str(e)}"
             }
+
+    @staticmethod
+    def _normalize_region_input(region_input: Any) -> List[str]:
+        """Normalize aws_region input into a list of region codes."""
+        region_list: List[str] = []
+        if isinstance(region_input, str):
+            parts = [part.strip() for part in region_input.split(",")]
+            region_list = [part for part in parts if part]
+        elif isinstance(region_input, (list, tuple, set)):
+            region_list = [str(item).strip() for item in region_input if str(item).strip()]
+        else:
+            region_list = []
+        return region_list
+
+    @staticmethod
+    def _normalize_service_input(services_input: Any) -> List[str]:
+        """Normalize services input into a list of service identifiers."""
+        if isinstance(services_input, str):
+            parts = [part.strip() for part in services_input.split(",")]
+            return [p for p in parts if p]
+        if isinstance(services_input, (list, tuple, set)):
+            return [str(item).strip() for item in services_input if str(item).strip()]
+        return []
+
+    @staticmethod
+    def _default_export_type_for_service(service: str) -> Optional[str]:
+        """Provide default export_type per service when caller omits it."""
+        service = (service or "").lower()
+        defaults = {
+            "rds": "clusters",
+            "s3": "buckets",
+            "kms": "keys",
+            "secretsmanager": "secrets",
+            "secrets-manager": "secrets",
+            "secrets_manager": "secrets",
+            "autoscaling": "auto_scaling_groups",
+            "auto-scaling": "auto_scaling_groups",
+            "ec2": "instances",
+            "iam": "users",
+            "lambda": "functions",
+            "dynamodb": "tables"
+        }
+        return defaults.get(service)
     
     def _execute_show_evidence(self, params: Dict) -> Dict:
         """Show local evidence summary"""
@@ -1539,6 +1720,162 @@ class ToolExecutor:
         result = test_tool_functionality(tool_name, test_parameters)
         
         return result
+
+    def _execute_list_pending_enhancements(self, params: Dict) -> Dict:
+        """List pending enhancement proposals awaiting approval."""
+        if not self.enhancement_manager:
+            return {"status": "error", "error": "Enhancement manager unavailable"}
+        status_filter = params.get("status")
+        records = self.enhancement_manager.list_enhancements(status_filter)
+        summaries = []
+        for record in records:
+            summaries.append({
+                "id": record.get("id"),
+                "summary": record.get("summary"),
+                "reason": record.get("reason"),
+                "status": record.get("status"),
+                "timestamp": record.get("timestamp"),
+                "files": [
+                    {
+                        "path": f.get("path"),
+                        "operation": f.get("operation"),
+                        "description": f.get("description")
+                    }
+                    for f in (record.get("files") or [])
+                ],
+                "test_plan": record.get("test_plan")
+            })
+        return {
+            "status": "success",
+            "result": {
+                "count": len(summaries),
+                "enhancements": summaries
+            }
+        }
+
+    def _execute_apply_pending_enhancement(self, params: Dict) -> Dict:
+        """Apply a pending enhancement after user approval."""
+        if not self.enhancement_manager:
+            return {"status": "error", "error": "Enhancement manager unavailable"}
+        proposal_id = params.get("proposal_id")
+        if not proposal_id:
+            return {"status": "error", "error": "Missing proposal_id"}
+        try:
+            record = self.enhancement_manager.apply_proposal(proposal_id)
+            return {
+                "status": "success",
+                "result": {
+                    "message": f"Enhancement {proposal_id} applied successfully",
+                    "proposal": {
+                        "id": record.get("id"),
+                        "summary": record.get("summary"),
+                        "status": record.get("status"),
+                        "applied_at": record.get("applied_at"),
+                        "test_plan": record.get("test_plan")
+                    }
+                }
+            }
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    def _execute_replay_evidence_playbook(self, params: Dict) -> Dict:
+        """Replay a stored evidence playbook to collect current-year evidence."""
+        fiscal_year = params.get("fiscal_year") or os.getenv('SHAREPOINT_CURRENT_YEAR') or "FY2025"
+        rfi_code = params.get("rfi_code")
+        if not rfi_code:
+            return {"status": "error", "error": "Missing rfi_code"}
+        overrides = {
+            key: params.get(key)
+            for key in ["aws_account", "aws_region", "audit_period", "start_date", "end_date", "date_field"]
+            if params.get(key)
+        }
+        if params.get("filter_by_date"):
+            overrides["filter_by_date"] = True
+        user_request = self.current_request or f"Replay playbook for {rfi_code}"
+        return self.playbook_replayer.replay(fiscal_year, rfi_code, user_request, overrides)
+
+    def _execute_bulk_aws_export(self, params: Dict) -> Dict:
+        """Execute multiple aws_export_data invocations across services/regions."""
+        services_input = params.get("services") or params.get("service")
+        if not services_input:
+            return {"status": "error", "error": "Missing services list"}
+        services = self._normalize_service_input(services_input)
+        if not services:
+            return {"status": "error", "error": "Services list empty after normalization"}
+        
+        regions_input = params.get("aws_regions") or params.get("aws_region")
+        if not regions_input:
+            return {"status": "error", "error": "Missing aws_regions"}
+        regions = self._normalize_region_input(regions_input)
+        if not regions:
+            return {"status": "error", "error": "No valid AWS regions provided"}
+        
+        account = params.get("aws_account")
+        if not account:
+            return {"status": "error", "error": "Missing aws_account"}
+        
+        format_type = params.get("format", "csv")
+        filter_by_date = params.get("filter_by_date")
+        audit_period = params.get("audit_period")
+        start_date = params.get("start_date")
+        end_date = params.get("end_date")
+        date_field = params.get("date_field")
+        rfi_code = params.get("rfi_code", "AUDIT-EXPORT")
+        default_export_type = params.get("export_type")
+        if filter_by_date and not (audit_period or (start_date and end_date)):
+            return {
+                "status": "error",
+                "error": "bulk_aws_export: filter_by_date requires audit_period or start/end dates"
+            }
+        if filter_by_date and not (audit_period or (start_date and end_date)):
+            return {
+                "status": "error",
+                "error": "bulk_aws_export: filter_by_date requires audit_period or start/end dates"
+            }
+        
+        summary = {"successes": [], "failures": []}
+        for service in services:
+            export_type = default_export_type or self._default_export_type_for_service(service)
+            if not export_type:
+                summary["failures"].append({
+                    "service": service,
+                    "regions": regions,
+                    "error": f"No export_type provided and no default mapping for service '{service}'"
+                })
+                continue
+            
+            tool_params = {
+                "service": service,
+                "export_type": export_type,
+                "format": format_type,
+                "aws_account": account,
+                "aws_region": regions,
+                "rfi_code": rfi_code,
+                "filter_by_date": filter_by_date,
+                "audit_period": audit_period,
+                "start_date": start_date,
+                "end_date": end_date,
+                "date_field": date_field
+            }
+            result = self._execute_aws_export(tool_params)
+            if result.get("status") == "success":
+                summary["successes"].append({
+                    "service": service,
+                    "result": result.get("result")
+                })
+            else:
+                summary["failures"].append({
+                    "service": service,
+                    "regions": regions,
+                    "error": result.get("error")
+                })
+        
+        overall_status = "success" if summary["successes"] else "error"
+        return {
+            "status": overall_status,
+            "result": summary if overall_status == "success" else summary,
+            "message": f"Completed {len(summary['successes'])} services with {len(summary['failures'])} failures"
+        }
     
     def _execute_browser_screenshot(self, params: Dict) -> Dict:
         """Execute get_browser_screenshot - Capture browser state for debugging"""
@@ -1947,11 +2284,23 @@ class ToolExecutor:
             
             tickets = jira.search_jql(
                 jql_query=params.get('jql_query'),
-                max_results=params.get('max_results', 1000),  # Default to 1000 (will paginate)
+                max_results=params.get('max_results', 0),  # Default to 0 = fetch ALL matching tickets
                 paginate=params.get('paginate', True),  # Enable pagination by default
                 board_name=params.get('board_name')
             )
             analytics = self._summarize_jira_tickets(tickets)
+            
+            # Prevent HUGE payloads from overwhelming the LLM
+            MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 300)
+            truncated = False
+            tickets_for_response = tickets
+            if MAX_TICKETS_FOR_RESPONSE and len(tickets) > MAX_TICKETS_FOR_RESPONSE:
+                tickets_for_response = tickets[:MAX_TICKETS_FOR_RESPONSE]
+                truncated = True
+                console.print(
+                    f"[yellow]⚠️  Truncating Jira results from {len(tickets)} to {MAX_TICKETS_FOR_RESPONSE} "
+                    "for LLM response safety. Include export to receive full dataset.[/yellow]"
+                )
             
             # Export if requested
             export_format = params.get('export_format')
@@ -1962,10 +2311,12 @@ class ToolExecutor:
             return {
                 "status": "success",
                 "result": {
-                    "tickets": tickets,
+                    "tickets": tickets_for_response,
                     "count": len(tickets),
                     "export_path": export_path,
-                    "analytics": analytics
+                    "analytics": analytics,
+                    "truncated": truncated,
+                    "total_tickets": len(tickets)
                 }
             }
         except Exception as e:

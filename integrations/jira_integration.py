@@ -206,8 +206,16 @@ class JiraIntegration:
     @staticmethod
     def _get_issue_raw_fields(issue: Any) -> Dict[str, Any]:
         """Safely extract raw field payload from Issue or fallback object"""
-        if hasattr(issue, 'raw') and isinstance(issue.raw, dict):
-            return issue.raw.get('fields', {}) or {}
+        raw_payload = getattr(issue, 'raw', None)
+        if isinstance(raw_payload, dict):
+            return raw_payload.get('fields', {}) or {}
+        # Some jira Issue objects expose `.raw` as PropertyHolder (type 'obj').
+        if raw_payload is not None and hasattr(raw_payload, '__dict__'):
+            maybe_dict = getattr(raw_payload, '__dict__', {})
+            if isinstance(maybe_dict, dict):
+                fields = maybe_dict.get('fields')
+                if isinstance(fields, dict):
+                    return fields
         return {}
     
     def _extract_advanced_fields(self, raw_fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -308,18 +316,199 @@ class JiraIntegration:
         """Combine user JQL with board filter JQL (if board provided)"""
         base_jql = (jql_query or '').strip()
         if not board_name:
-            return base_jql
+            return self._normalize_jql_dates(base_jql)
         
         project_hint = self._extract_project_key_from_jql(base_jql)
         board_filter_jql = self._get_board_filter_jql(board_name, project_hint)
         if not board_filter_jql:
             console.print(f"[yellow]⚠️  Could not resolve board '{board_name}'. Using original JQL only.[/yellow]")
-            return base_jql
+            return self._normalize_jql_dates(base_jql)
         
         console.print(f"[dim]   Applying board filter: {board_name}[/dim]")
         if not base_jql:
-            return board_filter_jql
-        return f"({board_filter_jql}) AND ({base_jql})"
+            return self._normalize_jql_dates(board_filter_jql)
+        combined = f"({board_filter_jql}) AND ({base_jql})"
+        return self._normalize_jql_dates(combined)
+    
+    @staticmethod
+    def _normalize_jql_dates(jql_query: str) -> str:
+        """
+        Fix common JQL date formatting issues that break Jira queries.
+        
+        Jira requires dates in format: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'
+        This fixes:
+        - Double-quoted dates with time: "2025-06-01" -> '2025-06-01'
+        - Ensures proper quote style
+        """
+        if not jql_query:
+            return jql_query
+        
+        # Pattern: created/updated/resolved >= "YYYY-MM-DD" (with double quotes)
+        # Fix: Change to single quotes or remove quotes entirely
+        import re
+        
+        # Replace double-quoted ISO dates with single-quoted ones
+        # Matches: created >= "2025-06-01" or created >= "2025-06-01 12:00"
+        pattern = r'(created|updated|resolved|due)\s*(>=|<=|>|<|=)\s*"(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2})?)"'
+        normalized = re.sub(pattern, r"\1 \2 '\3'", jql_query, flags=re.IGNORECASE)
+        
+        if normalized != jql_query:
+            console.print(f"[dim]   Normalized JQL dates: {normalized}[/dim]")
+        
+        return normalized
+    
+    @staticmethod
+    def _parse_jira_datetime(value: Optional[str]) -> Optional[datetime]:
+        """Parse Jira date/datetime strings into naive datetime objects."""
+        if not value:
+            return None
+        text = value.strip().strip("\"'")
+        
+        # Date only
+        try:
+            if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                return datetime.strptime(text, "%Y-%m-%d")
+        except ValueError:
+            return None
+        
+        # Normalize timezone formats (e.g., +0000, Z, +00:00)
+        def _normalize_tz(v: str) -> str:
+            if v.endswith('Z'):
+                return v[:-1] + '+0000'
+            if re.search(r'[+-]\d{2}:\d{2}$', v):
+                return v[:-3] + v[-2:]
+            return v
+        
+        candidates = [
+            "%Y-%m-%dT%H:%M:%S.%f%z",
+            "%Y-%m-%dT%H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%dT%H:%M:%S",
+        ]
+        normalized_text = _normalize_tz(text)
+        for fmt in candidates:
+            try:
+                dt = datetime.strptime(normalized_text, fmt)
+                return dt.replace(tzinfo=None)
+            except ValueError:
+                continue
+        return None
+    
+    @staticmethod
+    def _extract_post_filters_from_jql(jql_query: str) -> Dict[str, Any]:
+        """Extract date/label/project filter constraints from JQL for post-filter validation."""
+        filters: Dict[str, Any] = {
+            'created': {},
+            'labels': set(),
+            'project_keys': set()
+        }
+        if not jql_query:
+            return filters
+        
+        # Date filters (created field)
+        date_pattern = re.compile(
+            r"(created)\s*(>=|<=|>|<|=)\s*'([^']+)'",
+            re.IGNORECASE
+        )
+        for field, op, value in date_pattern.findall(jql_query):
+            parsed = JiraIntegration._parse_jira_datetime(value)
+            if parsed:
+                filters.setdefault(field.lower(), {})[op] = parsed
+        
+        # Label equality (labels = VALUE)
+        label_eq_pattern = re.compile(r"labels\s*=\s*([^\s]+)", re.IGNORECASE)
+        for match in label_eq_pattern.findall(jql_query):
+            filters['labels'].add(match.strip('\'"').lower())
+        
+        # labels in (...) pattern
+        label_in_pattern = re.compile(r"labels\s+in\s*\(([^)]+)\)", re.IGNORECASE)
+        for group in label_in_pattern.findall(jql_query):
+            items = [item.strip().strip('\'"') for item in group.split(',')]
+            for item in items:
+                if item:
+                    filters['labels'].add(item.lower())
+        
+        # Project filters (project = KEY or project in (KEY1, KEY2))
+        project_eq_pattern = re.compile(r"project\s*=\s*([^\s]+)", re.IGNORECASE)
+        for match in project_eq_pattern.findall(jql_query):
+            filters['project_keys'].add(match.strip('\'"').upper())
+        
+        project_in_pattern = re.compile(r"project\s+in\s*\(([^)]+)\)", re.IGNORECASE)
+        for group in project_in_pattern.findall(jql_query):
+            items = [item.strip().strip('\'"') for item in group.split(',')]
+            for item in items:
+                if item:
+                    filters['project_keys'].add(item.upper())
+        
+        if not filters['labels']:
+            filters.pop('labels')
+        if not filters.get('created'):
+            filters.pop('created', None)
+        if not filters['project_keys']:
+            filters.pop('project_keys')
+        return filters
+    
+    def _apply_post_filters(self, tickets: List[Dict[str, Any]], jql_query: str) -> List[Dict[str, Any]]:
+        """Apply additional filtering to enforce date/label constraints even if Jira misbehaves."""
+        filters = self._extract_post_filters_from_jql(jql_query)
+        if not filters:
+            return tickets
+        
+        filtered: List[Dict[str, Any]] = []
+        dropped_reasons = {'created': 0, 'labels': 0, 'project': 0}
+        
+        for ticket in tickets:
+            include = True
+            
+            # Created date filters
+            created_rules = filters.get('created')
+            if created_rules:
+                created_dt = self._parse_jira_datetime(ticket.get('created'))
+                if not created_dt:
+                    include = False
+                    dropped_reasons['created'] += 1
+                else:
+                    for op, boundary in created_rules.items():
+                        if op == '>=' and created_dt < boundary:
+                            include = False
+                        elif op == '<=' and created_dt > boundary:
+                            include = False
+                        elif op == '>' and created_dt <= boundary:
+                            include = False
+                        elif op == '<' and created_dt >= boundary:
+                            include = False
+                        elif op == '=' and created_dt != boundary:
+                            include = False
+                        if not include:
+                            dropped_reasons['created'] += 1
+                            break
+            
+            # Label filters (require all specified labels to be present)
+            if include and 'labels' in filters:
+                ticket_labels = {label.lower() for label in ticket.get('labels', [])}
+                if not filters['labels'].issubset(ticket_labels):
+                    include = False
+                    dropped_reasons['labels'] += 1
+            
+            # Project key filters (ensure ticket key prefix matches, e.g., XDR-12345)
+            if include and 'project_keys' in filters:
+                key = (ticket.get('key') or '').upper()
+                # Only keep tickets whose key starts with one of the project prefixes
+                if not any(key.startswith(f"{proj}-") for proj in filters['project_keys']):
+                    include = False
+                    dropped_reasons['project'] += 1
+            
+            if include:
+                filtered.append(ticket)
+        
+        if len(filtered) != len(tickets):
+            console.print(
+                f"[dim]   Post-filter reduced tickets from {len(tickets)} to {len(filtered)} "
+                f"(created drops: {dropped_reasons.get('created', 0)}, "
+                f"labels drops: {dropped_reasons.get('labels', 0)}, "
+                f"project drops: {dropped_reasons.get('project', 0)})[/dim]"
+            )
+        return filtered
     
     @staticmethod
     def _extract_project_key_from_jql(jql_query: str) -> Optional[str]:
@@ -479,7 +668,7 @@ class JiraIntegration:
     def search_jql(
         self,
         jql_query: str,
-        max_results: int = 1000,
+        max_results: int = 0,
         paginate: bool = True,
         board_name: Optional[str] = None
     ) -> List[Dict[str, Any]]:
@@ -488,7 +677,7 @@ class JiraIntegration:
         
         Args:
             jql_query: JQL query string (e.g., 'project = AUDIT AND status = "In Progress"')
-            max_results: Maximum number of results (default 1000, use 0 for all)
+            max_results: Maximum number of results (default 0 = fetch ALL matching tickets, no artificial cap)
             paginate: If True, automatically fetch all results using pagination
             board_name: Optional board/dashboard name to auto-apply its saved filter
         
@@ -526,12 +715,14 @@ class JiraIntegration:
                                 break
                             current_page_size = min(page_size, remaining)
                         
+                        # Use GET /rest/api/3/search/jql (the /search POST endpoint was removed by Jira)
                         response = self.jira._session.get(
                             f"{self.jira._options['server']}/rest/api/3/search/jql",
                             params={
                                 'jql': jql_query,
                                 'startAt': start_at,
-                                'maxResults': current_page_size
+                                'maxResults': current_page_size,
+                                'fields': 'key,summary,status,priority,assignee,reporter,created,updated,labels,issuetype,description,fixVersions,components,duedate'
                             }
                         )
                         
@@ -566,6 +757,13 @@ class JiraIntegration:
                                 console.print(f"[dim]   Will fetch up to: {effective_max} tickets[/dim]")
                         
                         page_issues = self._build_issue_objects(search_results)
+                        
+                        # DEBUG: Check if date filter is working by inspecting first few tickets
+                        if start_at == 0 and page_issues and 'created' in jql_query.lower():
+                            console.print(f"[dim]   🔍 DEBUG: Checking if date filter is working...[/dim]")
+                            for idx, issue in enumerate(page_issues[:3]):  # Check first 3 tickets
+                                created_date = getattr(getattr(issue, 'fields', None), 'created', 'N/A')
+                                console.print(f"[dim]      Ticket {idx+1} created: {created_date}[/dim]")
                     except Exception as e:
                         console.print(f"[red]❌ Error fetching page: {e}[/red]")
                         raise
@@ -603,17 +801,26 @@ class JiraIntegration:
                     
                     start_at += current_page_size
                 
+                tickets = self._apply_post_filters(tickets, jql_query)
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
                 return tickets
             else:
                 # Single request (no pagination) using new Jira Cloud API (POST method)
                 try:
-                    response = self.jira._session.get(
-                        f"{self.jira._options['server']}/rest/api/3/search/jql",
-                        params={
-                            'jql': jql_query,
-                            'maxResults': max_results
-                        }
+                    payload = {
+                        "jql": jql_query,
+                        "startAt": 0,
+                        "maxResults": max_results,
+                        "fields": [
+                            "key", "summary", "status", "priority", "assignee",
+                            "reporter", "created", "updated", "labels", "issuetype",
+                            "description", "fixVersions", "components", "duedate"
+                        ],
+                        "expand": []
+                    }
+                    response = self.jira._session.post(
+                        f"{self.jira._options['server']}/rest/api/3/search",
+                        json=payload
                     )
                     response.raise_for_status()
                     search_results = response.json()
@@ -625,6 +832,7 @@ class JiraIntegration:
                 
                 tickets = [self._build_ticket_dict(issue) for issue in issues]
                 
+                tickets = self._apply_post_filters(tickets, jql_query)
                 console.print(f"[green]✅ Found {len(tickets)} tickets[/green]")
                 return tickets
         

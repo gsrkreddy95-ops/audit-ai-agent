@@ -656,6 +656,9 @@ class AWSComprehensiveAuditCollector:
                         data = data.get(key, [])
                     resources = data if isinstance(data, list) else [data]
                 
+                # Service-specific enrichment (e.g., detailed metadata)
+                resources = self._post_process_resources(service, resource_type, resources)
+                
                 results[resource_type] = resources
                 console.print(f" [green]{len(resources)} found[/green]")
                 
@@ -705,6 +708,71 @@ class AWSComprehensiveAuditCollector:
                 continue
         
         return all_results
+    
+    def _post_process_resources(
+        self,
+        service: str,
+        resource_type: str,
+        resources: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Service-specific enrichment hooks.
+        """
+        if not resources:
+            return resources
+        
+        if service == 'kms' and resource_type == 'keys':
+            return self._enrich_kms_keys(resources)
+        
+        return resources
+    
+    def _enrich_kms_keys(self, keys: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Augment basic list_keys output with full metadata so CSV/JSON exports
+        include CreationDate, KeyState, Origin, rotation status, etc.
+        """
+        client = self._get_client('kms')
+        enriched = []
+        
+        console.print("      ↳ Enriching KMS key metadata (describe_key/rotation/tags)")
+        
+        for key in keys:
+            key_id = key.get('KeyId')
+            record = dict(key)
+            if not key_id:
+                enriched.append(record)
+                continue
+            
+            try:
+                metadata = client.describe_key(KeyId=key_id).get('KeyMetadata', {})
+                record.update(metadata)
+            except ClientError as exc:
+                record['DescribeError'] = exc.response['Error'].get('Message', str(exc))
+            
+            try:
+                rotation = client.get_key_rotation_status(KeyId=key_id)
+                record['KeyRotationEnabled'] = rotation.get('KeyRotationEnabled')
+            except ClientError:
+                record['KeyRotationEnabled'] = None
+            
+            try:
+                aliases_resp = client.list_aliases(KeyId=key_id)
+                record['Aliases'] = [alias.get('AliasName') for alias in aliases_resp.get('Aliases', [])]
+            except ClientError:
+                record['Aliases'] = []
+            
+            try:
+                tags_resp = client.list_resource_tags(KeyId=key_id)
+                record['Tags'] = {
+                    tag.get('TagKey'): tag.get('TagValue')
+                    for tag in tags_resp.get('Tags', [])
+                }
+            except ClientError:
+                record['Tags'] = {}
+            
+            enriched.append(record)
+        
+        return enriched
     
     def export_to_csv(
         self,
