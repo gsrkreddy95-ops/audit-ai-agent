@@ -1060,6 +1060,79 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                 "required": ["jql_query"]
             }
         },
+        {
+            "name": "jira_search_intent",
+            "description": """Natural-language Jira search that builds the correct JQL for you and fetches accurate results.
+
+Say things like:
+- "Filter XDR tickets with label TDR_ACCESS between 2025-06-01 and 2025-09-01"
+- "Tickets with labels STE and TDR_ACCESS created in July 2025"
+- "Bugs assigned to alice in last 30 days"
+
+The agent will:
+- Build robust JQL (labels in ("..."), half-open end date, ORDER BY created ASC)
+- Apply board filter JQL if you pass a board_name
+- Run slice-first weekly (and day-level if needed) to avoid Jira's 100/1000 caps
+- Compact payloads for LLM safety; export full dataset if requested""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project key (default: XDR)"
+                    },
+                    "labels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Labels to include (e.g., ['TDR_ACCESS','STE'])"
+                    },
+                    "created_start": {
+                        "type": "string",
+                        "description": "Start date (YYYY-MM-DD)"
+                    },
+                    "created_end": {
+                        "type": "string",
+                        "description": "Inclusive end date (YYYY-MM-DD). Will be converted to half-open internally."
+                    },
+                    "statuses": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by statuses (e.g., ['In Progress','Open'])"
+                    },
+                    "assignee": {
+                        "type": "string",
+                        "description": "Assignee username/email"
+                    },
+                    "text_contains": {
+                        "type": "string",
+                        "description": "Full-text contains (applies to text/summary)"
+                    },
+                    "order_by": {
+                        "type": "string",
+                        "description": "ORDER BY clause (default: 'created ASC')",
+                        "default": "created ASC"
+                    },
+                    "board_name": {
+                        "type": "string",
+                        "description": "Optional board name to merge its saved filter JQL"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Hard cap on total results (default: 0 = all)"
+                    },
+                    "paginate": {
+                        "type": "boolean",
+                        "description": "Enable pagination (default: true)"
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports full results to this format"
+                    }
+                },
+                "required": []
+            }
+        },
         
         {
             "name": "jira_get_ticket",

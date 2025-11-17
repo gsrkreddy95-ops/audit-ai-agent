@@ -259,6 +259,9 @@ class ToolExecutor:
             elif tool_name == "jira_search_jql":
                 return self._execute_jira_search_jql(tool_input)
             
+            elif tool_name == "jira_search_intent":
+                return self._execute_jira_search_intent(tool_input)
+            
             elif tool_name == "jira_get_ticket":
                 return self._execute_jira_get_ticket(tool_input)
             
@@ -2343,6 +2346,88 @@ class ToolExecutor:
             }
         except Exception as e:
             console.print(f"[red]❌ Jira get ticket failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
+    def _execute_jira_search_intent(self, params: Dict) -> Dict:
+        """Execute Jira search from natural-language style intent (build JQL then run)."""
+        try:
+            from integrations import JiraIntegration
+            
+            jira = JiraIntegration()
+            if not jira.jira:
+                return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+            
+            project = params.get('project') or "XDR"
+            labels = params.get('labels') or []
+            if isinstance(labels, str):
+                # Support comma-separated string
+                labels = [x.strip() for x in labels.split(',') if x.strip()]
+            created_start = params.get('created_start')
+            created_end = params.get('created_end')
+            statuses = params.get('statuses') or []
+            if isinstance(statuses, str):
+                statuses = [x.strip() for x in statuses.split(',') if x.strip()]
+            assignee = params.get('assignee')
+            text_contains = params.get('text_contains')
+            order_by = params.get('order_by') or "created ASC"
+            board_name = params.get('board_name')
+            
+            # Build robust JQL
+            jql = jira.build_jql_from_intent(
+                project=project,
+                labels=labels,
+                created_start=created_start,
+                created_end=created_end,
+                statuses=statuses,
+                assignee=assignee,
+                text_contains=text_contains,
+                order_by=order_by,
+                board_name=board_name
+            )
+            
+            console.print(f"[cyan]🧠 Intent → JQL: {jql}[/cyan]")
+            
+            tickets = jira.search_jql(
+                jql_query=jql,
+                max_results=params.get('max_results', 0),
+                paginate=params.get('paginate', True),
+                board_name=None  # already merged via builder if provided
+            )
+            
+            analytics = self._summarize_jira_tickets(tickets)
+            
+            # Optionally export full results
+            export_format = params.get('export_format')
+            export_path = ""
+            if export_format and tickets:
+                export_path = jira.export_tickets(tickets, output_format=export_format)
+            
+            # For LLM safety, reuse jira_search_jql truncation rules
+            MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 300)
+            truncated = False
+            tickets_for_response = tickets
+            if MAX_TICKETS_FOR_RESPONSE and len(tickets) > MAX_TICKETS_FOR_RESPONSE:
+                tickets_for_response = tickets[:MAX_TICKETS_FOR_RESPONSE]
+                truncated = True
+                console.print(
+                    f"[yellow]⚠️  Truncating Jira results from {len(tickets)} to {MAX_TICKETS_FOR_RESPONSE} "
+                    "for LLM response safety. Include export to receive full dataset.[/yellow]"
+                )
+            
+            return {
+                "status": "success",
+                "result": {
+                    "tickets": tickets_for_response,
+                    "count": len(tickets),
+                    "export_path": export_path,
+                    "analytics": analytics,
+                    "truncated": truncated,
+                    "total_tickets": len(tickets),
+                    "jql": jql
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Jira intent search failed: {e}[/red]")
             return {"status": "error", "error": str(e)}
     
     def _summarize_jira_tickets(self, tickets: List[Dict[str, Any]]) -> Dict[str, Any]:
