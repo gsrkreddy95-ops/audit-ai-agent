@@ -405,9 +405,9 @@ class JiraIntegration:
         if not jql_query:
             return filters
         
-        # Date filters (created field)
+        # Date filters (created field) - handle both single and double quotes
         date_pattern = re.compile(
-            r"(created)\s*(>=|<=|>|<|=)\s*'([^']+)'",
+            r"(created)\s*(>=|<=|>|<|=)\s*['\"]([^'\"]+)['\"]",
             re.IGNORECASE
         )
         for field, op, value in date_pattern.findall(jql_query):
@@ -415,10 +415,12 @@ class JiraIntegration:
             if parsed:
                 filters.setdefault(field.lower(), {})[op] = parsed
         
-        # Label equality (labels = VALUE)
-        label_eq_pattern = re.compile(r"labels\s*=\s*([^\s]+)", re.IGNORECASE)
+        # Label equality (labels = VALUE) - handle both single and double quotes
+        label_eq_pattern = re.compile(r"labels\s*=\s*['\"]?([^\s'\"ANDOR]+)['\"]?", re.IGNORECASE)
         for match in label_eq_pattern.findall(jql_query):
-            filters['labels'].add(match.strip('\'"').lower())
+            label = match.strip('\'"').lower()
+            if label and label not in ['and', 'or', 'not']:  # Skip JQL operators
+                filters['labels'].add(label)
         
         # labels in (...) pattern
         label_in_pattern = re.compile(r"labels\s+in\s*\(([^)]+)\)", re.IGNORECASE)
@@ -429,9 +431,11 @@ class JiraIntegration:
                     filters['labels'].add(item.lower())
         
         # Project filters (project = KEY or project in (KEY1, KEY2))
-        project_eq_pattern = re.compile(r"project\s*=\s*([^\s]+)", re.IGNORECASE)
+        project_eq_pattern = re.compile(r"project\s*=\s*['\"]?([A-Z0-9_-]+)['\"]?", re.IGNORECASE)
         for match in project_eq_pattern.findall(jql_query):
-            filters['project_keys'].add(match.strip('\'"').upper())
+            proj = match.strip('\'"').upper()
+            if proj:
+                filters['project_keys'].add(proj)
         
         project_in_pattern = re.compile(r"project\s+in\s*\(([^)]+)\)", re.IGNORECASE)
         for group in project_in_pattern.findall(jql_query):
@@ -440,54 +444,83 @@ class JiraIntegration:
                 if item:
                     filters['project_keys'].add(item.upper())
         
+        # Clean up empty filters
         if not filters['labels']:
-            filters.pop('labels')
+            filters.pop('labels', None)
         if not filters.get('created'):
             filters.pop('created', None)
         if not filters['project_keys']:
-            filters.pop('project_keys')
+            filters.pop('project_keys', None)
+        
         return filters
     
     def _apply_post_filters(self, tickets: List[Dict[str, Any]], jql_query: str) -> List[Dict[str, Any]]:
         """Apply additional filtering to enforce date/label constraints even if Jira misbehaves."""
         filters = self._extract_post_filters_from_jql(jql_query)
-        if not filters:
+        
+        # DEBUG: Log extracted filters
+        if filters:
+            console.print(f"[dim]   🔍 Post-filter active: {filters}[/dim]")
+        else:
+            console.print(f"[dim]   ⚠️  No post-filters extracted from JQL (Jira API must be working correctly)[/dim]")
             return tickets
         
         filtered: List[Dict[str, Any]] = []
         dropped_reasons = {'created': 0, 'labels': 0, 'project': 0}
+        sample_dropped = []  # Track first few dropped tickets for debugging
         
         for ticket in tickets:
             include = True
+            drop_reason = None
             
             # Created date filters
             created_rules = filters.get('created')
             if created_rules:
-                created_dt = self._parse_jira_datetime(ticket.get('created'))
+                created_str = ticket.get('created', '')
+                created_dt = self._parse_jira_datetime(created_str)
                 if not created_dt:
                     include = False
+                    drop_reason = f"created date unparseable: {created_str}"
                     dropped_reasons['created'] += 1
                 else:
+                    # Compare dates only (ignore time component)
+                    created_date = created_dt.date()
                     for op, boundary in created_rules.items():
-                        if op == '>=' and created_dt < boundary:
+                        boundary_date = boundary.date() if hasattr(boundary, 'date') else boundary
+                        if op == '>=' and created_date < boundary_date:
                             include = False
-                        elif op == '<=' and created_dt > boundary:
+                            drop_reason = f"created {created_date} < {boundary_date}"
+                            dropped_reasons['created'] += 1
+                            break
+                        elif op == '<=' and created_date > boundary_date:
                             include = False
-                        elif op == '>' and created_dt <= boundary:
+                            drop_reason = f"created {created_date} > {boundary_date}"
+                            dropped_reasons['created'] += 1
+                            break
+                        elif op == '>' and created_date <= boundary_date:
                             include = False
-                        elif op == '<' and created_dt >= boundary:
+                            drop_reason = f"created {created_date} <= {boundary_date}"
+                            dropped_reasons['created'] += 1
+                            break
+                        elif op == '<' and created_date >= boundary_date:
                             include = False
-                        elif op == '=' and created_dt != boundary:
+                            drop_reason = f"created {created_date} >= {boundary_date}"
+                            dropped_reasons['created'] += 1
+                            break
+                        elif op == '=' and created_date != boundary_date:
                             include = False
-                        if not include:
+                            drop_reason = f"created {created_date} != {boundary_date}"
                             dropped_reasons['created'] += 1
                             break
             
             # Label filters (require all specified labels to be present)
             if include and 'labels' in filters:
                 ticket_labels = {label.lower() for label in ticket.get('labels', [])}
-                if not filters['labels'].issubset(ticket_labels):
+                required_labels = filters['labels']
+                if not required_labels.issubset(ticket_labels):
                     include = False
+                    missing = required_labels - ticket_labels
+                    drop_reason = f"missing labels: {missing}"
                     dropped_reasons['labels'] += 1
             
             # Project key filters (ensure ticket key prefix matches, e.g., XDR-12345)
@@ -496,18 +529,34 @@ class JiraIntegration:
                 # Only keep tickets whose key starts with one of the project prefixes
                 if not any(key.startswith(f"{proj}-") for proj in filters['project_keys']):
                     include = False
+                    drop_reason = f"key {key} doesn't match project prefixes {filters['project_keys']}"
                     dropped_reasons['project'] += 1
             
             if include:
                 filtered.append(ticket)
+            elif len(sample_dropped) < 3:
+                sample_dropped.append(f"{ticket.get('key', '?')}: {drop_reason}")
         
+        # Always log post-filter results (even if no reduction)
         if len(filtered) != len(tickets):
             console.print(
-                f"[dim]   Post-filter reduced tickets from {len(tickets)} to {len(filtered)} "
+                f"[yellow]   🔍 Post-filter reduced tickets from {len(tickets)} to {len(filtered)} "
                 f"(created drops: {dropped_reasons.get('created', 0)}, "
                 f"labels drops: {dropped_reasons.get('labels', 0)}, "
-                f"project drops: {dropped_reasons.get('project', 0)})[/dim]"
+                f"project drops: {dropped_reasons.get('project', 0)})[/yellow]"
             )
+            if sample_dropped:
+                console.print(f"[dim]      Sample drops: {', '.join(sample_dropped)}[/dim]")
+        else:
+            console.print(
+                f"[yellow]   ⚠️  Post-filter applied but all {len(tickets)} tickets passed filters![/yellow]"
+            )
+            console.print(f"[dim]      Filters: {filters}[/dim]")
+            # Show sample ticket data for debugging
+            if tickets:
+                sample = tickets[0]
+                console.print(f"[dim]      Sample ticket: key={sample.get('key')}, created={sample.get('created')}, labels={sample.get('labels')}[/dim]")
+        
         return filtered
     
     @staticmethod
