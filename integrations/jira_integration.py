@@ -68,9 +68,20 @@ class JiraIntegration:
             current = slice_end + timedelta(days=1)
         return slices
 
+    @staticmethod
+    def _split_condition_and_order(jql_query: str) -> Tuple[str, str]:
+        """Split a JQL string into its filter condition and ORDER BY clause."""
+        match = re.search(r'\border\s+by\b', jql_query, re.IGNORECASE)
+        if match:
+            condition = jql_query[:match.start()].strip()
+            order_clause = jql_query[match.start():].strip()
+            return condition, order_clause
+        return jql_query.strip(), ''
+
     def _fetch_with_date_slices(
         self,
-        base_jql: str,
+        condition_jql: str,
+        order_clause: str,
         start_date: datetime,
         end_date: datetime
     ) -> List[Dict[str, Any]]:
@@ -83,9 +94,10 @@ class JiraIntegration:
         )
         aggregated: List[Dict[str, Any]] = []
         for idx, (slice_start, slice_end) in enumerate(slices, start=1):
+            order_segment = order_clause if order_clause else "ORDER BY created ASC"
             slice_jql = (
-                f"({base_jql}) AND created >= '{slice_start.strftime('%Y-%m-%d')}' "
-                f"AND created <= '{slice_end.strftime('%Y-%m-%d')}' ORDER BY created ASC"
+                f"({condition_jql}) AND created >= '{slice_start.strftime('%Y-%m-%d')}' "
+                f"AND created <= '{slice_end.strftime('%Y-%m-%d')}' {order_segment}"
             )
             console.print(
                 f"[cyan]   📅 Slice {idx}/{total_slices}: "
@@ -864,36 +876,58 @@ class JiraIntegration:
         
         try:
             jql_query = self._augment_jql_with_board_filter(jql_query, board_name)
-            base_jql = jql_query
+            condition_jql, order_clause = self._split_condition_and_order(jql_query)
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
             # Jira API limits to 100 per request, so we need pagination
             if paginate:
+                filters_for_slicing = self._extract_post_filters_from_jql(condition_jql)
+                created_rules = filters_for_slicing.get('created')
+                created_range = self._get_created_range(created_rules)
+                safety_enabled = bool(created_range)
+                
                 tickets = []
                 start_at = 0
                 page_size = 100  # Jira API max per request
                 total_fetched = 0
                 
-                # SAFETY: If Jira API is ignoring filters, cap at 1000 and rely on post-filter
-                SAFETY_LIMIT = 1000
-                effective_max = max_results if max_results > 0 else SAFETY_LIMIT
+                if safety_enabled:
+                    SAFETY_LIMIT = 1000
+                    console.print(
+                        "[dim]   Created date filter detected. Safety cap set to 1000; "
+                        "date slicing will auto-run if Jira ignores filters.[/dim]"
+                    )
+                else:
+                    SAFETY_LIMIT = None
+                    console.print(
+                        "[dim]   No created date filter detected. Fetching all tickets "
+                        "(no safety cap—results may exceed 1000).[/dim]"
+                    )
                 
-                console.print(f"[cyan]📄 Fetching results with pagination (max: {effective_max})...[/cyan]")
-                console.print(f"[dim]   Safety limit: {SAFETY_LIMIT} tickets (post-filter will apply exact JQL constraints)[/dim]")
+                if max_results > 0:
+                    effective_max: Optional[int] = max_results
+                else:
+                    effective_max = SAFETY_LIMIT
+                
+                console.print(f"[cyan]📄 Fetching results with pagination (max: {effective_max or 'ALL'})...[/cyan]")
+                if SAFETY_LIMIT:
+                    console.print(
+                        f"[dim]   Safety limit: {SAFETY_LIMIT} tickets (post-filter will apply exact JQL constraints)[/dim]"
+                    )
                 
                 total_available = None  # Will be set after first request
                 
                 while True:
                     # Fetch a page of results using Jira Cloud's new JQL API
                     try:
-                        # NOTE: /search/jql is a POST endpoint with JSON body
-                        # Determine current page size respecting limits
+                        # Determine current page size respecting limits (if any)
                         current_page_size = page_size
-                        remaining = effective_max - total_fetched
-                        if remaining <= 0:
-                            console.print(f"[dim]   Safety limit reached ({effective_max}). Stopping pagination.[/dim]")
-                            break
-                        current_page_size = min(page_size, remaining)
+                        if effective_max is not None:
+                            remaining = effective_max - total_fetched
+                            if remaining <= 0:
+                                console.print(f"[dim]   Limit reached ({effective_max}). Stopping pagination.[/dim]")
+                                break
+                            current_page_size = min(page_size, remaining)
                         
                         fields_list = [
                             "key", "summary", "status", "priority", "assignee",
@@ -959,7 +993,7 @@ class JiraIntegration:
                     
                     # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
                     # and Jira is clearly ignoring filters, stop and rely on post-filter
-                    if total_available > 0 and total_fetched > (total_available * 3):
+                        if total_available and total_available > 0 and total_fetched > (total_available * 3):
                         console.print(f"[yellow]⚠️  Fetched {total_fetched} tickets but Jira reported total={total_available}[/yellow]")
                         console.print(f"[yellow]   Jira API is ignoring filters. Stopping pagination and applying post-filter...[/yellow]")
                         break
@@ -976,7 +1010,7 @@ class JiraIntegration:
                         break
                     
                     # 3. Hit the safety/user-specified limit
-                    if total_fetched >= effective_max:
+                    if effective_max is not None and total_fetched >= effective_max:
                         console.print(f"[dim]   Limit reached ({total_fetched}/{effective_max})[/dim]")
                         break
                     
@@ -984,28 +1018,21 @@ class JiraIntegration:
                 
                 if (
                     _allow_date_slicing
-                    and effective_max == SAFETY_LIMIT
+                    and safety_enabled
+                    and effective_max is not None
                     and total_fetched >= effective_max
                 ):
-                    filters_for_slicing = self._extract_post_filters_from_jql(jql_query)
-                    created_rules = filters_for_slicing.get('created')
-                    created_range = self._get_created_range(created_rules)
-                    if created_range:
-                        sliced_tickets = self._fetch_with_date_slices(
-                            base_jql=jql_query,
-                            start_date=created_range[0],
-                            end_date=created_range[1]
-                        )
-                        sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
-                        console.print(
-                            f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]"
-                        )
-                        return sliced_tickets
-                    else:
-                        console.print(
-                            "[yellow]⚠️  Unable to derive created date range for slicing. "
-                            "Returning safety-limited results.[/yellow]"
-                        )
+                    sliced_tickets = self._fetch_with_date_slices(
+                        condition_jql=condition_jql,
+                        order_clause=order_clause,
+                        start_date=created_range[0],  # type: ignore[index]
+                        end_date=created_range[1]     # type: ignore[index]
+                    )
+                    sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
+                    console.print(
+                        f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]"
+                    )
+                    return sliced_tickets
                 
                 tickets = self._apply_post_filters(tickets, jql_query)
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
