@@ -891,6 +891,9 @@ class JiraIntegration:
                 page_size = 100  # Jira API max per request
                 total_fetched = 0
                 
+                MAX_NO_DATE_RESULTS = 5000
+                guard_triggered = False
+                
                 if safety_enabled:
                     SAFETY_LIMIT = 1000
                     console.print(
@@ -1014,6 +1017,21 @@ class JiraIntegration:
                         console.print(f"[dim]   Limit reached ({total_fetched}/{effective_max})[/dim]")
                         break
                     
+                    # 4. Guardrail for unbounded queries without created filters
+                    if (
+                        not safety_enabled
+                        and effective_max is None
+                        and total_fetched >= MAX_NO_DATE_RESULTS
+                    ):
+                        console.print(
+                            f"[yellow]⚠️  Retrieved {total_fetched} tickets without a date filter.[/yellow]"
+                        )
+                        console.print(
+                            "[yellow]   For performance reasons, please add a created date range to narrow the results.[/yellow]"
+                        )
+                        guard_triggered = True
+                        break
+                    
                     start_at += current_page_size
                 
                 if (
@@ -1035,6 +1053,10 @@ class JiraIntegration:
                     return sliced_tickets
                 
                 tickets = self._apply_post_filters(tickets, jql_query)
+                if guard_triggered:
+                    console.print(
+                        "[yellow]⚠️  Results truncated at 5,000 tickets due to missing created date filter.[/yellow]"
+                    )
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
                 return tickets
             else:
