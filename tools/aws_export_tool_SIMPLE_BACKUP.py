@@ -15,26 +15,7 @@ from botocore.exceptions import ClientError, NoCredentialsError
 import pandas as pd
 from rich.console import Console
 
-from tools.aws_export_filters import resolve_date_range, filter_records_by_date
-
 console = Console()
-
-DATE_FIELD_DEFAULTS = {
-    'iam': {
-        'users': 'CreateDate',
-        'roles': 'CreateDate'
-    },
-    's3': {
-        'buckets': 'CreationDate'
-    },
-    'rds': {
-        'instances': 'InstanceCreateTime',
-        'clusters': 'ClusterCreateTime'
-    },
-    'ec2': {
-        'instances': 'LaunchTime'
-    }
-}
 
 
 class AWSExportToolEnhanced:
@@ -680,33 +661,6 @@ class AWSExportToolEnhanced:
             return False
 
 
-def _write_empty_placeholder(format: str, output_path: str, message: str) -> bool:
-    """Create placeholder evidence file when no resources exist"""
-    try:
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        
-        if format == 'csv':
-            with open(output_path, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['message'])
-                writer.writerow([message])
-        elif format == 'json':
-            with open(output_path, 'w') as f:
-                json.dump({
-                    "message": message,
-                    "data": []
-                }, f, indent=2)
-        else:
-            with open(output_path, 'w') as f:
-                f.write(message + "\n")
-        
-        console.print(f"[green]✅ Saved placeholder file: {output_path}[/green]")
-        return True
-    except Exception as e:
-        console.print(f"[red]❌ Error writing placeholder file: {e}[/red]")
-        return False
-
-
 # High-level export function for tool_executor compatibility
 def export_aws_data(
     service: str,
@@ -714,12 +668,7 @@ def export_aws_data(
     format: str,
     aws_account: str,
     aws_region: str,
-    output_path: str,
-    filter_by_date: bool = False,
-    audit_period: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    date_field: Optional[str] = None
+    output_path: str
 ) -> bool:
     """
     High-level function to export AWS data with COMPLETE configuration details
@@ -748,7 +697,6 @@ def export_aws_data(
         os.environ['AWS_PROFILE'] = aws_account
     
     exporter = AWSExportToolEnhanced(aws_profile=aws_account, region=aws_region)
-    start_dt, end_dt, range_label = resolve_date_range(filter_by_date, start_date, end_date, audit_period)
     
     # Get data based on service and export type
     data = []
@@ -773,27 +721,9 @@ def export_aws_data(
         if export_type in ['instances', 'instance']:
             data = exporter.export_ec2_instances()
     
-    if start_dt and end_dt:
-        inferred_field = date_field or DATE_FIELD_DEFAULTS.get(service, {}).get(export_type)
-        if inferred_field:
-            data = filter_records_by_date(data, inferred_field, start_dt, end_dt)
-        else:
-            console.print(
-                f"[yellow]⚠️  No default date field for {service}/{export_type}; skipping date filter.[/yellow]"
-            )
-    
     if not data:
-        context = (
-            f"No {service.upper()} {export_type} resources found in region "
-            f"{aws_region} for account {aws_account}"
-        )
-        if start_dt and end_dt:
-            context += f" within {range_label}"
-        console.print(f"[yellow]⚠️  {context}[/yellow]")
-        
-        # Create placeholder evidence file instead of failing
-        placeholder_saved = _write_empty_placeholder(format, output_path, context)
-        return placeholder_saved
+        console.print("[yellow]⚠️  No data retrieved[/yellow]")
+        return False
     
     # Save in requested format
     if format == 'csv':

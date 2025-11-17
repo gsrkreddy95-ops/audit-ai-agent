@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# AuditMate launcher helper
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PID_FILE="${PROJECT_ROOT}/.auditmate.pid"
+LOG_DIR="${PROJECT_ROOT}/logs"
+LOG_FILE="${LOG_DIR}/auditmate.out"
+
+ensure_log_dir() {
+    mkdir -p "${LOG_DIR}"
+}
+
+is_running() {
+    if [[ -f "${PID_FILE}" ]]; then
+        local pid
+        pid="$(cat "${PID_FILE}")"
+        if kill -0 "${pid}" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    return 1
+}
+
+start_interactive() {
+    cd "${PROJECT_ROOT}"
+    exec ./QUICK_START.sh
+}
+
+start_daemon() {
+    if is_running; then
+        echo "AuditMate daemon already running (PID $(cat "${PID_FILE}"))."
+        exit 0
+    fi
+
+    ensure_log_dir
+    cd "${PROJECT_ROOT}"
+    nohup ./QUICK_START.sh >> "${LOG_FILE}" 2>&1 &
+    echo $! > "${PID_FILE}"
+    echo "AuditMate daemon started (PID $(cat "${PID_FILE}")). Logs: ${LOG_FILE}"
+}
+
+stop_daemon() {
+    if ! is_running; then
+        echo "AuditMate daemon is not running."
+        rm -f "${PID_FILE}"
+        exit 0
+    fi
+
+    local pid
+    pid="$(cat "${PID_FILE}")"
+    kill "${pid}" 2>/dev/null || true
+    rm -f "${PID_FILE}"
+    echo "AuditMate daemon stopped."
+}
+
+status_daemon() {
+    if is_running; then
+        echo "AuditMate daemon running (PID $(cat "${PID_FILE}"))."
+    else
+        echo "AuditMate daemon not running."
+    fi
+}
+
+restart_daemon() {
+    stop_daemon
+    start_daemon
+}
+
+usage() {
+    cat <<EOF
+Usage: auditmate <command>
+
+Commands:
+  start            Launch AuditMate in the foreground (interactive chat)
+  daemon           Run AuditMate in the background (like previous start)
+  stop             Stop the background daemon
+  restart          Restart the background daemon
+  status           Show daemon status
+EOF
+}
+
+case "${1:-}" in
+    start)
+        start_interactive
+        ;;
+    daemon)
+        start_daemon
+        ;;
+    stop)
+        stop_daemon
+        ;;
+    restart)
+        restart_daemon
+        ;;
+    status)
+        status_daemon
+        ;;
+    *)
+        usage
+        exit 1
+        ;;
+esac
+

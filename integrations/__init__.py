@@ -1,5 +1,16 @@
-"""Integration helpers for external systems (AWS, SharePoint, Jira, etc.)."""
+"""
+Integrations Package - Jira, Confluence, GitHub
 
-from .jira_client import JiraIssue, JiraSearchClient, JiraSearchError  # noqa: F401
+Provides integrations with external services for the audit agent.
+"""
 
-__all__ = ["JiraIssue", "JiraSearchClient", "JiraSearchError"]
+from .jira_integration import JiraIntegration
+from .confluence_integration import ConfluenceIntegration
+from .github_integration import GitHubIntegration
+
+__all__ = [
+    'JiraIntegration',
+    'ConfluenceIntegration',
+    'GitHubIntegration',
+]
+

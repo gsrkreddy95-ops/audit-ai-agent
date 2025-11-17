@@ -44,6 +44,13 @@ datadog-api-client==2.20.0
 # Splunk
 splunk-sdk==1.7.4
 
+# Jira & Confluence (Atlassian)
+jira==3.5.2
+atlassian-python-api==3.41.0
+
+# GitHub
+PyGithub==2.1.1
+
 # Kubernetes
 kubernetes==29.0.0
 
