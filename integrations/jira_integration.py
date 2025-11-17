@@ -23,6 +23,60 @@ console = Console()
 
 
 class JiraIntegration:
+    def _request_jira_search_page(
+        self,
+        jql_query: str,
+        start_at: int,
+        max_results: int,
+        fields: List[str]
+    ) -> Dict[str, Any]:
+        """
+        Call Jira search endpoint (prefers POST /rest/api/3/search, falls back to GET /rest/api/3/search/jql)
+        Returns parsed JSON payload.
+        """
+        server = self.jira._options['server']
+        last_error = None
+        fields_param = ",".join(fields)
+        endpoints = [
+            ("POST", f"{server}/rest/api/3/search"),
+            ("GET", f"{server}/rest/api/3/search/jql"),
+        ]
+        
+        for method, url in endpoints:
+            try:
+                if method == "POST":
+                    payload = {
+                        "jql": jql_query,
+                        "startAt": start_at,
+                        "maxResults": max_results,
+                        "fields": fields,
+                        "fieldsByKeys": False,
+                        "expand": []
+                    }
+                    response = self.jira._session.post(url, json=payload)
+                else:
+                    params = {
+                        "jql": jql_query,
+                        "startAt": start_at,
+                        "maxResults": max_results,
+                        "fields": fields_param
+                    }
+                    response = self.jira._session.get(url, params=params)
+                
+                if start_at == 0:
+                    console.print(
+                        f"[dim]   API Request: {method} {url.replace(server, '')} (startAt={start_at}, maxResults={max_results})[/dim]"
+                    )
+                response.raise_for_status()
+                return response.json()
+            except Exception as error:
+                last_error = error
+                console.print(
+                    f"[yellow]⚠️  Jira {method} {url.replace(server, '')} failed: {error}. Trying fallback endpoint...[/yellow]"
+                )
+        
+        raise last_error  # type: ignore[arg-type]
+
     """Jira API Integration for ticket management"""
     
     def __init__(self, jira_url: Optional[str] = None, email: Optional[str] = None, api_token: Optional[str] = None):
@@ -796,23 +850,17 @@ class JiraIntegration:
                             break
                         current_page_size = min(page_size, remaining)
                         
-                        # Use GET /rest/api/3/search/jql (the /search POST endpoint was removed by Jira)
-                        response = self.jira._session.get(
-                            f"{self.jira._options['server']}/rest/api/3/search/jql",
-                            params={
-                                'jql': jql_query,
-                                'startAt': start_at,
-                                'maxResults': current_page_size,
-                                'fields': 'key,summary,status,priority,assignee,reporter,created,updated,labels,issuetype,description,fixVersions,components,duedate'
-                            }
+                        fields_list = [
+                            "key", "summary", "status", "priority", "assignee",
+                            "reporter", "created", "updated", "labels", "issuetype",
+                            "description", "fixVersions", "components", "duedate"
+                        ]
+                        search_results = self._request_jira_search_page(
+                            jql_query=jql_query,
+                            start_at=start_at,
+                            max_results=current_page_size,
+                            fields=fields_list
                         )
-                        
-                        # DEBUG: Log the request details
-                        if start_at == 0:
-                            console.print(f"[dim]   API Request: GET /rest/api/3/search/jql[/dim]")
-                            console.print(f"[dim]   JQL: {jql_query}[/dim]")
-                        response.raise_for_status()
-                        search_results = response.json()
                         
                         # Check total available results from Jira
                         # NOTE: Jira Cloud's /search/jql API sometimes returns total=0 incorrectly
@@ -895,29 +943,22 @@ class JiraIntegration:
             else:
                 # Single request (no pagination) using new Jira Cloud API (POST method)
                 try:
-                    payload = {
-                        "jql": jql_query,
-                        "startAt": 0,
-                        "maxResults": max_results,
-                        "fields": [
-                            "key", "summary", "status", "priority", "assignee",
-                            "reporter", "created", "updated", "labels", "issuetype",
-                            "description", "fixVersions", "components", "duedate"
-                        ],
-                        "expand": []
-                    }
-                    response = self.jira._session.post(
-                        f"{self.jira._options['server']}/rest/api/3/search",
-                        json=payload
+                    fields_list = [
+                        "key", "summary", "status", "priority", "assignee",
+                        "reporter", "created", "updated", "labels", "issuetype",
+                        "description", "fixVersions", "components", "duedate"
+                    ]
+                    page_size = max_results or 50
+                    search_results = self._request_jira_search_page(
+                        jql_query=jql_query,
+                        start_at=0,
+                        max_results=page_size,
+                        fields=fields_list
                     )
-                    response.raise_for_status()
-                    search_results = response.json()
-                    
                     issues = self._build_issue_objects(search_results)
                 except Exception as e:
                     console.print(f"[red]❌ Error fetching tickets: {e}[/red]")
                     return []
-                
                 tickets = [self._build_ticket_dict(issue) for issue in issues]
                 
                 tickets = self._apply_post_filters(tickets, jql_query)
