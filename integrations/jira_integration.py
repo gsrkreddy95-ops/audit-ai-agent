@@ -993,7 +993,7 @@ class JiraIntegration:
                     
                     # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
                     # and Jira is clearly ignoring filters, stop and rely on post-filter
-                        if total_available and total_available > 0 and total_fetched > (total_available * 3):
+                    if total_available and total_available > 0 and total_fetched > (total_available * 3):
                         console.print(f"[yellow]⚠️  Fetched {total_fetched} tickets but Jira reported total={total_available}[/yellow]")
                         console.print(f"[yellow]   Jira API is ignoring filters. Stopping pagination and applying post-filter...[/yellow]")
                         break
