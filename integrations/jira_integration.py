@@ -405,6 +405,9 @@ class JiraIntegration:
         if not jql_query:
             return filters
         
+        # DEBUG: Log the JQL query being parsed
+        console.print(f"[dim]   🔍 Extracting filters from JQL: {jql_query[:100]}...[/dim]")
+        
         # Date filters (created field) - handle both single and double quotes
         date_pattern = re.compile(
             r"(created)\s*(>=|<=|>|<|=)\s*['\"]([^'\"]+)['\"]",
@@ -416,11 +419,33 @@ class JiraIntegration:
                 filters.setdefault(field.lower(), {})[op] = parsed
         
         # Label equality (labels = VALUE) - handle both single and double quotes
-        label_eq_pattern = re.compile(r"labels\s*=\s*['\"]?([^\s'\"ANDOR]+)['\"]?", re.IGNORECASE)
-        for match in label_eq_pattern.findall(jql_query):
-            label = match.strip('\'"').lower()
-            if label and label not in ['and', 'or', 'not']:  # Skip JQL operators
+        # Pattern 1: Quoted labels: labels = "VALUE" or labels = 'VALUE'
+        label_quoted_pattern = re.compile(r"labels\s*=\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
+        for match in label_quoted_pattern.findall(jql_query):
+            label = match.strip().lower()
+            if label:
                 filters['labels'].add(label)
+        
+        # Pattern 2: Unquoted labels: labels = VALUE
+        # Use a more explicit pattern that captures the full label value
+        # Match: labels = VALUE where VALUE is alphanumeric + underscore/hyphen
+        # Stop when we hit whitespace followed by AND/OR/ORDER or end of string
+        label_unquoted_pattern = re.compile(
+            r'\blabels\s*=\s*([A-Za-z0-9_\-]+)',
+            re.IGNORECASE
+        )
+        for match in label_unquoted_pattern.finditer(jql_query):
+            label_value = match.group(1).strip().lower()
+            # Verify this is a real label by checking what follows
+            match_end = match.end()
+            remaining_text = jql_query[match_end:].strip()
+            # If followed by AND, OR, ORDER, or another field, it's a complete label
+            # Also accept if it's at the end of the query
+            if (not remaining_text or 
+                re.match(r'^\s*(AND|OR|ORDER|created|updated|project|labels|status|assignee|reporter|priority|issuetype)', remaining_text, re.IGNORECASE)):
+                if label_value and len(label_value) > 1 and label_value not in ['and', 'or', 'not', 'in', 'is', 'was', 'changed', 'created', 'updated']:
+                    filters['labels'].add(label_value)
+                    console.print(f"[dim]      ✅ Extracted label: '{label_value}' from JQL[/dim]")
         
         # labels in (...) pattern
         label_in_pattern = re.compile(r"labels\s+in\s*\(([^)]+)\)", re.IGNORECASE)
@@ -451,6 +476,9 @@ class JiraIntegration:
             filters.pop('created', None)
         if not filters['project_keys']:
             filters.pop('project_keys', None)
+        
+        # DEBUG: Log final extracted filters
+        console.print(f"[dim]   🔍 Extracted filters: created={filters.get('created')}, labels={filters.get('labels')}, project_keys={filters.get('project_keys')}[/dim]")
         
         return filters
     
