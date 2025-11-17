@@ -145,7 +145,6 @@ class JiraSearchClient:
             return self.page_size
         remaining = max(limit - fetched, 0)
         return min(self.page_size, remaining or self.page_size)
-
     def _request(self, method: str, url: str, params: Optional[Dict] = None) -> Response:
         last_error: Optional[Exception] = None
 

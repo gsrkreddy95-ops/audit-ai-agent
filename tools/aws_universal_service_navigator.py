@@ -267,7 +267,6 @@ class AWSUniversalServiceNavigator:
         current_url = self._safe_current_url()
         if not current_url or 'console.aws.amazon.com' not in current_url:
             return False
-
         # CRITICAL: If on AWS homepage (/console/home), NEVER reuse!
         # Homepage shows "Recently Viewed" which contains service names but is NOT the service page
         if '/console/home' in current_url:
@@ -463,7 +462,7 @@ class AWSUniversalServiceNavigator:
             self.click_tab(tab)
 
         return True
-    
+   
     def navigate_to_section(
         self,
         section_name: str,
