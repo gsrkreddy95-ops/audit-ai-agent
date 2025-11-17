@@ -24,7 +24,7 @@ console = Console()
 _agent_instance = None
 
 def cleanup_handler(signum=None, frame=None):
-    """Handle cleanup on exit/interrupt"""
+    """Handle cleanup on exit/interrupt (for signals)"""
     global _agent_instance
     if _agent_instance:
         console.print("\n[cyan]🧹 Cleaning up resources...[/cyan]")
@@ -33,12 +33,25 @@ def cleanup_handler(signum=None, frame=None):
             console.print("[green]✅ Cleanup complete[/green]\n")
         except Exception as e:
             console.print(f"[yellow]⚠️  Cleanup warning: {e}[/yellow]\n")
-    sys.exit(0)
+    # Only exit if called from signal handler (not atexit)
+    if signum is not None:
+        sys.exit(0)
+
+def atexit_cleanup_handler():
+    """Handle cleanup on normal exit (no sys.exit call)"""
+    global _agent_instance
+    if _agent_instance:
+        console.print("\n[cyan]🧹 Cleaning up resources...[/cyan]")
+        try:
+            _agent_instance.cleanup()
+            console.print("[green]✅ Cleanup complete[/green]\n")
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Cleanup warning: {e}[/yellow]\n")
 
 # Register cleanup handlers
 signal.signal(signal.SIGINT, cleanup_handler)
 signal.signal(signal.SIGTERM, cleanup_handler)
-atexit.register(lambda: cleanup_handler() if _agent_instance else None)
+atexit.register(atexit_cleanup_handler)
 
 def print_welcome():
     """Print welcome banner"""

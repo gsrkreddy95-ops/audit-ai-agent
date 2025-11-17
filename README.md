@@ -141,6 +141,21 @@ analysis = analyzer.analyze_rfi_folder_intelligent(
 # - Exact replication instructions
 ```
 
+### **5. One-command Launcher**
+
+Rather than running `./QUICK_START.sh` manually, use the helper script:
+
+```bash
+chmod +x bin/auditmate          # one-time setup
+auditmate start                 # launches the chat in your terminal (foreground)
+auditmate daemon                # runs in background + logs to logs/auditmate.out
+auditmate status                # displays daemon status
+auditmate stop                  # stops the daemon
+auditmate restart               # restarts the daemon
+```
+
+Foreground mode exits when you close the chat. Daemon mode stores the PID in `.auditmate.pid`, keeps logs under `logs/auditmate.out`, and still executes the same quick-start under the hood.
+
 ---
 
 ## 📁 Project Structure

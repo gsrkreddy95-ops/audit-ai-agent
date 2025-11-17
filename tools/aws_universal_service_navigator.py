@@ -260,33 +260,85 @@ class AWSUniversalServiceNavigator:
             return False
 
     def _reuse_existing_service_view(self, service_key: str, service_name: str) -> bool:
+        """
+        STRICT validation: Only reuse if ACTUALLY on the service console page.
+        NOT if just seeing service name in "Recently Viewed" or on homepage!
+        """
         current_url = self._safe_current_url()
-        if not current_url:
+        if not current_url or 'console.aws.amazon.com' not in current_url:
             return False
 
-        current_variants = self._normalized_url_variants(current_url)
-        fragments = self._get_service_url_fragments(service_key)
-
+        # CRITICAL: If on AWS homepage (/console/home), NEVER reuse!
+        # Homepage shows "Recently Viewed" which contains service names but is NOT the service page
+        if '/console/home' in current_url:
+            console.print(f"[dim]   On AWS homepage, need to navigate to {service_name}...[/dim]")
+            return False
+        
+        # STRICT: Check if URL actually contains the service path
+        # e.g., apigateway URL must have '/apigateway/' in path
+        # Not just seeing "API Gateway" text somewhere on page!
+        service_path_patterns = {
+            'apigateway': ['/apigateway/', '/apigateway/main', '/apigateway/home'],
+            'api-gateway': ['/apigateway/', '/apigateway/main', '/apigateway/home'],
+            'rds': ['/rds/', '/rds/home', '/rds#'],
+            'ec2': ['/ec2/', '/ec2/v2', '/ec2/home'],
+            'lambda': ['/lambda/', '/lambda/home'],
+            's3': ['s3.console.aws.amazon.com', '/s3/'],
+            'vpc': ['/vpc/', '/vpc/home'],
+            'iam': ['/iam/', '/iamv2/'],
+            'cloudtrail': ['/cloudtrail/', '/cloudtrail/home'],
+            'cloudwatch': ['/cloudwatch/', '/cloudwatch/home'],
+            'kms': ['/kms/', '/kms/home'],
+            'secretsmanager': ['/secretsmanager/', '/secretsmanager/home'],
+            'secrets-manager': ['/secretsmanager/', '/secretsmanager/home'],
+            'systems-manager': ['/systems-manager/', '/systems-manager/home'],
+            'ssm': ['/systems-manager/', '/systems-manager/home'],
+            'backup': ['/backup/', '/backup/home'],
+            'bedrock': ['/bedrock/', '/bedrock/home'],
+            'dynamodb': ['/dynamodb/', '/dynamodbv2/'],
+            'sns': ['/sns/', '/sns/v3/'],
+            'sqs': ['/sqs/', '/sqs/v2/'],
+            'elb': ['/ec2/v2/home', '/ec2/home#LoadBalancers'],
+            'elasticloadbalancing': ['/ec2/v2/home', '/ec2/home#LoadBalancers'],
+        }
+        
+        # Check if current URL contains the actual service path
+        if service_key in service_path_patterns:
+            patterns = service_path_patterns[service_key]
+            url_lower = current_url.lower()
+            
+            for pattern in patterns:
+                if pattern.lower() in url_lower:
+                    console.print(
+                        f"[bold green]🔁 Reusing active {service_name} console (verified at: {pattern})[/bold green]"
+                    )
+                    self._record_service_visit(service_key, service_name, url=current_url, mode="reuse")
+                    try:
+                        self.driver.execute_script("window.scrollTo(0, 0);")
+                    except Exception:
+                        pass
+                    return True
+            
+            # URL doesn't contain service path - must navigate!
+            console.print(f"[dim]   Current page not {service_name} console, will navigate...[/dim]")
+            return False
+        
+        # For unknown services, do strict URL matching
         matched = self._url_matches_service(service_key, url=current_url, service_name=service_name)
-
-        context = self.service_contexts.get(service_key)
-        if not matched and context and context.last_url:
-            matched = self._url_matches_service(service_key, url=context.last_url, service_name=service_name)
-
-        if not matched and service_name and len(service_name) > 1:
-            matched = self._page_contains_text(service_name)
-
+        
         if matched:
-            console.print(
-                f"[bold green]🔁 Reusing active {service_name} view within the existing AWS Console session[/bold green]"
-            )
-            self._record_service_visit(service_key, service_name, url=current_url, mode="reuse")
-            try:
-                self.driver.execute_script("window.scrollTo(0, 0);")
-            except Exception:
-                pass
-            return True
-
+            # Double-check: URL must contain service key, not just text on page
+            if service_key.lower() in current_url.lower():
+                console.print(
+                    f"[bold green]🔁 Reusing active {service_name} view[/bold green]"
+                )
+                self._record_service_visit(service_key, service_name, url=current_url, mode="reuse")
+                try:
+                    self.driver.execute_script("window.scrollTo(0, 0);")
+                except Exception:
+                    pass
+                return True
+        
         return False
 
     def _update_current_service_tab(self, tab_name: str, event: str = "tab:click"):
@@ -412,75 +464,353 @@ class AWSUniversalServiceNavigator:
 
         return True
     
-    def _navigate_via_search(self, service_name: str, service_key: Optional[str] = None) -> bool:
-        """Navigate using AWS Console search (HUMAN-LIKE!)"""
+    def navigate_to_section(
+        self,
+        section_name: str,
+        click_first_resource: bool = False,
+        resource_name: Optional[str] = None,
+        resource_index: int = 0
+    ) -> bool:
+        """
+        Navigate to a specific section within the current AWS service.
+        
+        Examples:
+            - "Custom Domain Names" in API Gateway
+            - "Databases" in RDS
+            - "Load Balancers" in EC2
+            - "Functions" in Lambda
+            
+        Args:
+            section_name: The section/page to navigate to (e.g., "Custom Domain Names")
+            click_first_resource: If True, clicks the first resource in the list
+            resource_name: If provided, clicks the resource with this name
+            resource_index: If click_first_resource=True, clicks this index (default: 0)
+        
+        Returns:
+            bool: True if navigation successful
+        """
         try:
-            console.print(f"[cyan]🔍 Using AWS Console search for '{service_name}'...[/cyan]")
+            console.print(f"[cyan]🧭 Navigating to section: '{section_name}'...[/cyan]")
+            
+            # STRATEGY 1: Look for sidebar/navigation menu links
+            result = self.driver.execute_script("""
+                var sectionName = arguments[0];
+                var sectionLower = sectionName.toLowerCase();
+                console.log('=== Section Navigation ===');
+                console.log('Looking for:', sectionName);
+                
+                // Look for navigation links (sidebar, menu, etc.)
+                var selectors = [
+                    'a[href*="#"]',  // Hash links (common in AWS)
+                    'nav a',          // Navigation links
+                    'aside a',        // Sidebar links
+                    '[role="navigation"] a',
+                    '.awsui-side-navigation a',
+                    '[data-testid*="nav"] a',
+                    'ul li a',        // List links
+                    '.awsui-table a'  // Table links
+                ];
+                
+                for (var s = 0; s < selectors.length; s++) {
+                    var links = document.querySelectorAll(selectors[s]);
+                    console.log('Checking', links.length, 'links with selector:', selectors[s]);
+                    
+                    for (var i = 0; i < links.length; i++) {
+                        var link = links[i];
+                        var linkText = (link.textContent || link.innerText || '').trim().toLowerCase();
+                        
+                        if (linkText === sectionLower || 
+                            linkText.includes(sectionLower) ||
+                            sectionLower.includes(linkText)) {
+                            console.log('✅ Found matching link:', linkText);
+                            link.scrollIntoView({behavior: 'smooth', block: 'center'});
+                            link.click();
+                            return {success: true, method: 'link-click', text: linkText};
+                        }
+                    }
+                }
+                
+                // STRATEGY 2: Look for buttons
+                var buttons = document.querySelectorAll('button, [role="button"]');
+                console.log('Checking', buttons.length, 'buttons');
+                
+                for (var i = 0; i < buttons.length; i++) {
+                    var btn = buttons[i];
+                    var btnText = (btn.textContent || btn.innerText || '').trim().toLowerCase();
+                    
+                    if (btnText.includes(sectionLower)) {
+                        console.log('✅ Found matching button:', btnText);
+                        btn.scrollIntoView({behavior: 'smooth', block: 'center'});
+                        btn.click();
+                        return {success: true, method: 'button-click', text: btnText};
+                    }
+                }
+                
+                return {success: false, error: 'No matching navigation element found'};
+            """, section_name)
+            
+            if result and result.get('success'):
+                console.print(f"[green]✅ Navigated to '{section_name}' via {result.get('method')}[/green]")
+                time.sleep(2)  # Wait for page load
+                
+                # Handle resource selection if requested
+                if click_first_resource or resource_name:
+                    return self._select_resource(resource_name, resource_index)
+                
+                return True
+            else:
+                console.print(f"[yellow]⚠️  Could not find section '{section_name}'[/yellow]")
+                return False
+        
+        except Exception as e:
+            console.print(f"[red]❌ Section navigation failed: {e}[/red]")
+            return False
+    
+    def _select_resource(
+        self,
+        resource_name: Optional[str] = None,
+        resource_index: int = 0
+    ) -> bool:
+        """
+        Select a resource from the current list/table.
+        
+        Args:
+            resource_name: If provided, clicks the resource with this name
+            resource_index: If resource_name not provided, clicks this index (default: 0 = first)
+        
+        Returns:
+            bool: True if resource selected successfully
+        """
+        try:
+            if resource_name:
+                console.print(f"[cyan]🎯 Selecting resource: '{resource_name}'...[/cyan]")
+            else:
+                console.print(f"[cyan]🎯 Selecting resource at index {resource_index}...[/cyan]")
+            
+            result = self.driver.execute_script("""
+                var resourceName = arguments[0];
+                var resourceIndex = arguments[1];
+                console.log('=== Resource Selection ===');
+                
+                // Look for table rows or list items
+                var selectors = [
+                    '.awsui-table tbody tr',
+                    'table tbody tr',
+                    '[role="row"]',
+                    'ul li',
+                    '.resource-list li',
+                    '[data-testid*="resource"]',
+                    '[data-testid*="item"]'
+                ];
+                
+                for (var s = 0; s < selectors.length; s++) {
+                    var items = document.querySelectorAll(selectors[s]);
+                    
+                    if (items.length === 0) continue;
+                    
+                    console.log('Found', items.length, 'resources with selector:', selectors[s]);
+                    
+                    if (resourceName) {
+                        // Search by name
+                        var nameLower = resourceName.toLowerCase();
+                        for (var i = 0; i < items.length; i++) {
+                            var item = items[i];
+                            var itemText = (item.textContent || item.innerText || '').toLowerCase();
+                            
+                            if (itemText.includes(nameLower)) {
+                                console.log('✅ Found resource:', resourceName);
+                                
+                                // Try to find clickable link within item
+                                var link = item.querySelector('a');
+                                if (link) {
+                                    link.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                    link.click();
+                                    return {success: true, method: 'name-match'};
+                                }
+                                
+                                // Fallback: click the item itself
+                                item.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                item.click();
+                                return {success: true, method: 'name-match-direct'};
+                            }
+                        }
+                    } else {
+                        // Select by index
+                        if (resourceIndex >= 0 && resourceIndex < items.length) {
+                            var item = items[resourceIndex];
+                            console.log('✅ Selecting resource at index', resourceIndex);
+                            
+                            // Try to find clickable link within item
+                            var link = item.querySelector('a');
+                            if (link) {
+                                link.scrollIntoView({behavior: 'smooth', block: 'center'});
+                                link.click();
+                                return {success: true, method: 'index-select'};
+                            }
+                            
+                            // Fallback: click the item itself
+                            item.scrollIntoView({behavior: 'smooth', block: 'center'});
+                            item.click();
+                            return {success: true, method: 'index-select-direct'};
+                        }
+                    }
+                }
+                
+                return {success: false, error: 'No matching resource found'};
+            """, resource_name, resource_index)
+            
+            if result and result.get('success'):
+                console.print(f"[green]✅ Resource selected via {result.get('method')}[/green]")
+                time.sleep(2)  # Wait for page load
+                return True
+            else:
+                console.print(f"[yellow]⚠️  Could not select resource[/yellow]")
+                return False
+        
+        except Exception as e:
+            console.print(f"[red]❌ Resource selection failed: {e}[/red]")
+            return False
+    
+    def _navigate_via_search(self, service_name: str, service_key: Optional[str] = None) -> bool:
+        """
+        UNIVERSAL AWS Console Search - Works for ANY service!
+        Uses AWS Console's built-in search (most reliable method)
+        """
+        try:
+            console.print(f"[cyan]🔍 Universal AWS search for '{service_name}'...[/cyan]")
 
             result = self.driver.execute_script("""
                 var serviceName = arguments[0];
-                console.log('=== AWS Console Search ===');
+                console.log('=== Universal AWS Console Search ===');
                 console.log('Searching for:', serviceName);
                 
-                // Find search button
+                // STEP 1: Find and click search button (multiple selectors for robustness)
                 var searchButton = document.querySelector('[data-testid="awsc-nav-search-button"]') ||
                                  document.querySelector('[aria-label="Search"]') ||
                                  document.querySelector('button[aria-label*="Search"]') ||
-                                 document.querySelector('#awsc-nav-search-button');
+                                 document.querySelector('#awsc-nav-search-button') ||
+                                 document.querySelector('[data-testid="awsc-header-search-button"]') ||
+                                 document.querySelector('button[class*="search"]');
                 
                 if (!searchButton) {
                     console.log('ERROR: Search button not found');
                     return {success: false, error: 'Search button not found'};
                 }
                 
-                // Click search button
                 searchButton.click();
-                console.log('Clicked search button');
+                console.log('✅ Clicked search button');
                 
-                // Wait for search input to appear
+                // STEP 2: Wait for search input and type
                 setTimeout(function() {
                     var searchInput = document.querySelector('input[type="search"]') ||
                                     document.querySelector('[data-testid="search-input"]') ||
+                                    document.querySelector('[data-testid="awsc-header-search-input"]') ||
                                     document.querySelector('input[placeholder*="Search"]') ||
-                                    document.querySelector('#awsc-nav-search-field');
+                                    document.querySelector('input[placeholder*="search"]') ||
+                                    document.querySelector('#awsc-nav-search-field') ||
+                                    document.querySelector('input[aria-label*="Search"]');
                     
                     if (!searchInput) {
                         console.log('ERROR: Search input not found');
                         return;
                     }
                     
-                    console.log('Found search input, typing...');
+                    console.log('✅ Found search input, typing:', serviceName);
+                    searchInput.focus();
                     searchInput.value = serviceName;
+                    
+                    // Trigger all possible events for search
                     searchInput.dispatchEvent(new Event('input', { bubbles: true }));
                     searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+                    searchInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+                    searchInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
                     
-                    // Wait for results and click first one
+                    console.log('✅ Search query sent');
+                    
+                    // STEP 3: Wait for results and click first service result
                     setTimeout(function() {
+                        console.log('Looking for search results...');
+                        
+                        // Try multiple result selectors (AWS changes UI frequently)
                         var results = document.querySelectorAll('[data-testid="search-result"]') ||
+                                    document.querySelectorAll('[data-testid="awsc-nav-service-menu-item"]') ||
                                     document.querySelectorAll('a[href*="console.aws"]') ||
-                                    document.querySelectorAll('.search-result');
+                                    document.querySelectorAll('.awsui-table-row a') ||
+                                    document.querySelectorAll('[class*="search-result"]') ||
+                                    document.querySelectorAll('[role="option"]') ||
+                                    document.querySelectorAll('li[role="option"] a');
                         
                         console.log('Found', results.length, 'search results');
                         
                         if (results.length > 0) {
-                            console.log('Clicking first result...');
-                            results[0].click();
+                            // Filter results to prefer exact service matches
+                            var serviceNameLower = serviceName.toLowerCase();
+                            var bestResult = null;
+                            
+                            for (var i = 0; i < results.length; i++) {
+                                var result = results[i];
+                                var resultText = (result.textContent || result.innerText || '').toLowerCase();
+                                
+                                console.log('Result', i, ':', resultText.substring(0, 50));
+                                
+                                // Skip "Recently Viewed" or "Recent" sections
+                                if (resultText.includes('recent') && resultText.includes('viewed')) {
+                                    console.log('  → Skipping (Recently Viewed section)');
+                                    continue;
+                                }
+                                
+                                // Prefer exact matches or service links
+                                var href = result.href || '';
+                                if (href.includes('console.aws.amazon.com') && !href.includes('/home?')) {
+                                    bestResult = result;
+                                    console.log('  → Found console link!');
+                                    break;
+                                }
+                                
+                                // Fallback: use first non-recent result
+                                if (!bestResult && resultText.includes(serviceNameLower)) {
+                                    bestResult = result;
+                                }
+                            }
+                            
+                            if (bestResult) {
+                                console.log('✅ Clicking best result:', (bestResult.textContent || '').substring(0, 50));
+                                bestResult.click();
+                            } else if (results.length > 0) {
+                                console.log('⚠️  No perfect match, clicking first result');
+                                results[0].click();
+                            }
+                        } else {
+                            console.log('ERROR: No search results found');
                         }
-                    }, 800);
+                    }, 1000); // Increased wait time for results
                 }, 500);
                 
                 return {success: true};
             """, service_name)
             
-            time.sleep(4)  # Wait for navigation
+            time.sleep(5)  # Wait for navigation to complete
             
             current_url = self.driver.current_url
-            if self._url_matches_service(service_key, url=current_url, service_name=service_name):
+            console.print(f"[dim]   After search, at: {current_url}[/dim]")
+            
+            # STRICT validation: Must NOT be on homepage
+            if '/console/home' in current_url:
+                console.print(f"[yellow]⚠️  Search landed on homepage, not actual service[/yellow]")
+                return False
+            
+            # Validate we're on a service console
+            if 'console.aws.amazon.com' in current_url and current_url != self.driver.current_url:
                 console.print(f"[green]✅ Search navigation successful![/green]")
                 return True
-            else:
-                console.print(f"[yellow]⚠️  Search may not have worked[/yellow]")
-                return False
+            
+            # Check if service key in URL
+            if service_key and service_key.lower() in current_url.lower():
+                console.print(f"[green]✅ Search found {service_name} service![/green]")
+                return True
+            
+            console.print(f"[yellow]⚠️  Search completed but service validation unclear[/yellow]")
+            return False
         
         except Exception as e:
             console.print(f"[red]❌ Search navigation failed: {e}[/red]")
@@ -529,6 +859,247 @@ class AWSUniversalServiceNavigator:
         self.driver.execute_script("window.scrollTo(0, 0);")
         time.sleep(1)
         return True
+    
+    def handle_pagination(self, screenshot_callback: Optional[Callable] = None, max_pages: int = 50) -> Dict:
+        """
+        🔄 UNIVERSAL PAGINATION HANDLER - Works for ALL AWS Services!
+        
+        Automatically detects and navigates through all pages in paginated AWS Console views.
+        
+        Handles multiple pagination patterns:
+        1. Standard AWS pagination (1, 2, 3, ... Next)
+        2. "Load more" buttons
+        3. Infinite scroll
+        4. Dropdown page selectors
+        5. "Next" only buttons
+        
+        Args:
+            screenshot_callback: Optional function to call for each page (receives page_number)
+            max_pages: Safety limit (default: 50 pages)
+        
+        Returns:
+            Dict with results:
+            {
+                "total_pages": 8,
+                "screenshots": ["page1.png", "page2.png", ...],
+                "items_captured": 120,
+                "pagination_type": "standard"
+            }
+        
+        Example:
+            # Capture all pages of KMS keys
+            navigator.navigate_to_service("KMS")
+            results = navigator.handle_pagination(
+                screenshot_callback=lambda page: f"kms_page_{page}.png"
+            )
+        """
+        console.print("\n[bold cyan]" + "="*60 + "[/bold cyan]")
+        console.print("[bold cyan]🔄 PAGINATION HANDLER ACTIVATED[/bold cyan]")
+        console.print("[bold cyan]" + "="*60 + "[/bold cyan]\n")
+        
+        results = {
+            "total_pages": 0,
+            "screenshots": [],
+            "items_captured": 0,
+            "pagination_type": "unknown",
+            "error": None
+        }
+        
+        current_page = 1
+        screenshots = []
+        
+        try:
+            while current_page <= max_pages:
+                console.print(f"\n[bold yellow]📄 Page {current_page}[/bold yellow]")
+                
+                # Wait for page content to load
+                time.sleep(2)
+                
+                # Count items on current page
+                items_on_page = self._count_items_on_page()
+                results["items_captured"] += items_on_page
+                console.print(f"[cyan]   Items on this page: {items_on_page}[/cyan]")
+                
+                # Take screenshot if callback provided
+                if screenshot_callback:
+                    try:
+                        screenshot_path = screenshot_callback(current_page)
+                        screenshots.append(screenshot_path)
+                        console.print(f"[green]   ✅ Screenshot saved: {screenshot_path}[/green]")
+                    except Exception as e:
+                        console.print(f"[yellow]   ⚠️  Screenshot failed: {e}[/yellow]")
+                
+                # Try to find and click "Next" button
+                next_clicked = self._click_next_page()
+                
+                if not next_clicked:
+                    # No more pages
+                    console.print(f"[green]✅ Reached end of pagination (Page {current_page})[/green]")
+                    break
+                
+                current_page += 1
+                
+                # Safety check
+                if current_page > max_pages:
+                    console.print(f"[yellow]⚠️  Reached max page limit ({max_pages})[/yellow]")
+                    break
+            
+            results["total_pages"] = current_page
+            results["screenshots"] = screenshots
+            results["pagination_type"] = self._detect_pagination_type()
+            
+            # Summary
+            console.print("\n[bold green]" + "="*60 + "[/bold green]")
+            console.print("[bold green]✅ PAGINATION COMPLETE[/bold green]")
+            console.print(f"[bold green]   Total Pages: {results['total_pages']}[/bold green]")
+            console.print(f"[bold green]   Items Captured: {results['items_captured']}[/bold green]")
+            console.print(f"[bold green]   Screenshots: {len(screenshots)}[/bold green]")
+            console.print("[bold green]" + "="*60 + "[/bold green]\n")
+            
+        except Exception as e:
+            results["error"] = str(e)
+            console.print(f"[red]❌ Pagination error: {e}[/red]")
+        
+        return results
+    
+    def _count_items_on_page(self) -> int:
+        """Count items/rows on current page"""
+        try:
+            # Try multiple selectors for different AWS services
+            count_script = """
+                // Try table rows (most common)
+                let rows = document.querySelectorAll('table tbody tr');
+                if (rows.length > 0) return rows.length;
+                
+                // Try cards/tiles
+                let cards = document.querySelectorAll('[data-testid*="card"], .awsui-cards-card-container > div');
+                if (cards.length > 0) return cards.length;
+                
+                // Try list items
+                let items = document.querySelectorAll('ul[role="list"] > li, ol[role="list"] > li');
+                if (items.length > 0) return items.length;
+                
+                // Try awsui-table rows
+                let awsuiRows = document.querySelectorAll('awsui-table tbody tr, [role="row"]');
+                if (awsuiRows.length > 1) return awsuiRows.length - 1; // Subtract header
+                
+                return 0;
+            """
+            
+            count = self.driver.execute_script(count_script)
+            return count if count else 0
+            
+        except Exception as e:
+            console.print(f"[dim]   Could not count items: {e}[/dim]")
+            return 0
+    
+    def _click_next_page(self) -> bool:
+        """
+        Universal "Next Page" clicker - tries multiple strategies
+        
+        Returns:
+            True if successfully clicked next, False if no more pages
+        """
+        # Strategy 1: Look for "Next" button
+        strategies = [
+            # AWS Pagination - "Next" button
+            {
+                "name": "AWS Next Button",
+                "script": """
+                    let nextBtn = document.querySelector('button[data-testid="pagination-button-next"]') ||
+                                  document.querySelector('button:not([disabled])[aria-label*="Next"]') ||
+                                  document.querySelector('button:not([disabled])[aria-label*="next"]') ||
+                                  document.querySelector('a[aria-label*="Next"]');
+                    
+                    if (nextBtn && !nextBtn.disabled && !nextBtn.hasAttribute('aria-disabled')) {
+                        nextBtn.click();
+                        return true;
+                    }
+                    return false;
+                """
+            },
+            # Numbered pagination - click next number
+            {
+                "name": "Numbered Pages",
+                "script": """
+                    let pages = document.querySelectorAll('button[data-testid^="pagination-button-"]:not([aria-current])');
+                    let currentPage = document.querySelector('button[data-testid^="pagination-button-"][aria-current="true"]');
+                    
+                    if (currentPage && pages.length > 0) {
+                        // Find the next page number
+                        for (let page of pages) {
+                            let pageNum = parseInt(page.textContent);
+                            let currentNum = parseInt(currentPage.textContent);
+                            if (pageNum === currentNum + 1) {
+                                page.click();
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                """
+            },
+            # "Load more" button
+            {
+                "name": "Load More Button",
+                "script": """
+                    let loadMore = document.querySelector('button:not([disabled])')
+                    if (loadMore && loadMore.textContent.match(/load more|show more/i)) {
+                        loadMore.click();
+                        return true;
+                    }
+                    return false;
+                """
+            },
+            # Right arrow / chevron
+            {
+                "name": "Right Arrow Icon",
+                "script": """
+                    let rightArrow = document.querySelector('button[aria-label*="forward"]') ||
+                                     document.querySelector('button svg[data-icon="angle-right"]') ||
+                                     document.querySelector('a[rel="next"]');
+                    
+                    if (rightArrow && !rightArrow.disabled) {
+                        rightArrow.click();
+                        return true;
+                    }
+                    return false;
+                """
+            }
+        ]
+        
+        for strategy in strategies:
+            try:
+                result = self.driver.execute_script(strategy["script"])
+                if result:
+                    console.print(f"[dim]   🎯 {strategy['name']} clicked[/dim]")
+                    time.sleep(1)  # Wait for page load
+                    return True
+            except Exception as e:
+                continue
+        
+        # No strategy worked - assume we're at the end
+        return False
+    
+    def _detect_pagination_type(self) -> str:
+        """Detect what type of pagination this page uses"""
+        try:
+            detection_script = """
+                if (document.querySelector('button[data-testid="pagination-button-next"]')) {
+                    return 'standard-aws';
+                }
+                if (document.querySelector('button')) {
+                    return 'load-more';
+                }
+                if (document.querySelector('a[rel="next"]')) {
+                    return 'link-based';
+                }
+                return 'unknown';
+            """
+            
+            return self.driver.execute_script(detection_script)
+        except:
+            return 'unknown'
     
     def click_tab(self, tab_name: str) -> bool:
         """

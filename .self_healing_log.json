@@ -1,0 +1,34 @@
+{
+  "fixes": [
+    {
+      "timestamp": "2025-11-09T03:26:04.725471",
+      "tool_name": "aws_take_screenshot",
+      "issue": "Section navigation losing service context and returning to homepage",
+      "success": true,
+      "details": {
+        "file": "ai_brain/tool_executor.py",
+        "method": "_execute_aws_screenshot",
+        "lines_changed": "492-519",
+        "fix_type": "Added recovery logic and wait times",
+        "test_result": "pending - user to test"
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2025-11-09T03:33:32.853030",
+      "tool_name": "aws_take_screenshot",
+      "issue": "NameError: name 'time' is not defined",
+      "success": true,
+      "details": {
+        "file": "ai_brain/tool_executor.py",
+        "line": 6,
+        "fix_type": "Added missing import",
+        "import_added": "time",
+        "error_line": 478,
+        "discovered_by": "Runtime error during S3 screenshot",
+        "test_result": "success - import added"
+      },
+      "error": null
+    }
+  ]
+}

@@ -67,6 +67,10 @@ class IntelligentAgent:
                 "content": user_input
             })
             
+            # Share latest request with ToolExecutor for meta-intelligence context
+            if hasattr(self, "tool_executor") and self.tool_executor:
+                self.tool_executor.set_current_request(user_input)
+            
             # Let Claude process and decide
             response = self._process_with_tools()
             
@@ -254,7 +258,15 @@ class IntelligentAgent:
     
     def _get_system_prompt(self) -> str:
         """System prompt that teaches Claude how to use tools"""
-        return """You are AuditMate, an intelligent audit evidence collection assistant powered by Claude 3.5 Sonnet.
+        # Get current date/time for context
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %d, %Y")
+        current_year = datetime.now().year
+        
+        return f"""You are AuditMate, an intelligent audit evidence collection assistant powered by Claude 3.5 Sonnet.
+
+⏰ CRITICAL: Today's date is {current_date}. The current year is {current_year}.
+When users mention dates like "2025", "today", "this year", or "till now", use {current_year} as the reference year.
 
 🚀 **REVOLUTIONARY NEW PARADIGM: YOU ARE NOW A CODING AGENT!**
 
@@ -293,17 +305,17 @@ start_date = (end_date - timedelta(days=1)).replace(day=1)
 
 # Query costs
 response = ce.get_cost_and_usage(
-    TimePeriod={
+    TimePeriod={{
         'Start': start_date.strftime('%Y-%m-%d'),
         'End': end_date.strftime('%Y-%m-%d')
-    },
+    }},
     Granularity='DAILY',
     Metrics=['UnblendedCost'],
-    GroupBy=[{'Type': 'SERVICE', 'Key': 'SERVICE'}]
+    GroupBy=[{{'Type': 'SERVICE', 'Key': 'SERVICE'}}]
 )
 
 # Process and display results
-print(f"Billing Report for {start_date.strftime('%B %Y')}")
+print(f"Billing Report for {{start_date.strftime('%B %Y')}}")
 print("="*50)
 
 for result in response['ResultsByTime']:
@@ -311,7 +323,7 @@ for result in response['ResultsByTime']:
     for group in result['Groups']:
         service = group['Keys'][0]
         cost = group['Metrics']['UnblendedCost']['Amount']
-        print(f"{date} | {service}: ${float(cost):.2f}")
+        print(f"{{date}} | {{service}}: ${{float(cost):.2f}}")
 ```
 
 Then call: `execute_python_code(code=..., description="Generate AWS billing report")`
@@ -926,7 +938,7 @@ When a tool fails, you can NOW FIX IT YOURSELF! Follow this workflow:
    diagnose_error(
        error_message="<the error>",
        tool_name="<the tool that failed>",
-       parameters={<what you passed>}
+       parameters={"<whatever parameters you passed>"}
    )
    ```
    This will give you:
@@ -1082,10 +1094,10 @@ generate_new_tool(
     description="Compare two RDS snapshots and show configuration differences",
     functionality="Use boto3 rds client to describe snapshots, compare configs, generate diff report",
     parameters=[
-        {"name": "snapshot1_id", "type": "str", "required": True},
-        {"name": "snapshot2_id", "type": "str", "required": True},
-        {"name": "aws_account", "type": "str", "required": True},
-        {"name": "aws_region", "type": "str", "required": True}
+        {{"name": "snapshot1_id", "type": "str", "required": True}},
+        {{"name": "snapshot2_id", "type": "str", "required": True}},
+        {{"name": "aws_account", "type": "str", "required": True}},
+        {{"name": "aws_region", "type": "str", "required": True}}
     ],
     aws_services=["rds"],
     libraries_needed=["boto3", "deepdiff"]
@@ -1131,6 +1143,8 @@ compare_rds_snapshots(
   "Which AWS production account should I use? (ctr-prod, sxo101, sxo202, etc.)"
   "Which AWS region? (us-east-1, eu-west-1, ap-southeast-1, etc.)"
 - DO NOT assume ctr-int or test accounts for audit evidence
+- ✅ EXCEPTION: If the user explicitly says "use ctr-int/ctr-test/non-prod for testing/experiments", honor that immediately,
+  respond once acknowledging it's non-prod, and DO NOT keep re-asking. Assume they understand the risk for that session.
 - If previous evidence shows specific accounts/regions, suggest those but still confirm
 - Example: "I see previous evidence used ctr-prod in us-east-1. Should I use the same?"
 

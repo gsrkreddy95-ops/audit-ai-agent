@@ -130,7 +130,7 @@ class BrowserSessionManager:
             from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced
 
             console.print("[bold cyan]🚀 Launching NEW browser session (will be reused!)[/bold cyan]")
-            browser = UniversalScreenshotEnhanced(headless=False, timeout=180, debug=True)
+            browser = UniversalScreenshotEnhanced(headless=False, timeout=180, debug=True, persistent_profile=True)
 
             if browser.connect():
                 cls._browser_instance = browser

@@ -24,6 +24,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from ai_brain.plan_models import ExecutionPlan, PlanStep
 from evidence_manager.document_intelligence import DocumentIntelligence, DocumentInsight
+from tools.universal_output_validator import UniversalOutputValidator  # NEW
 
 console = Console()
 
@@ -48,6 +49,7 @@ class AIOrchestrator:
         self.llm = llm
         self.evidence_manager = evidence_manager
         self.tool_executor = tool_executor
+        self.output_validator = UniversalOutputValidator()  # NEW: Universal validation
         self.execution_plan = None
         self.plan_model: Optional[ExecutionPlan] = None
         self.execution_history = []
@@ -320,6 +322,38 @@ Create a comprehensive plan now:"""
                 console.print(f"[yellow]🔧 Executing {tool_name}...[/yellow]")
 
                 result = self.tool_executor.execute_tool(tool_name, parameters)
+                
+                # 🔍 NEW: Validate tool output
+                console.print(f"\n[bold yellow]🔍 Validating tool output...[/bold yellow]")
+                validation_result = self.output_validator.validate_tool_output(
+                    tool_name=tool_name,
+                    tool_parameters=parameters,
+                    tool_output=result
+                )
+                
+                # Add validation to result
+                if isinstance(result, dict):
+                    result["validation"] = validation_result
+                
+                # Check validation
+                if not validation_result.get("valid"):
+                    console.print(f"\n[bold red]⚠️  OUTPUT VALIDATION FAILED![/bold red]")
+                    console.print(f"[red]   Confidence: {validation_result.get('confidence', 0)*100:.0f}%[/red]")
+                    console.print(f"[red]   Issues: {validation_result.get('issues', [])}[/red]")
+                    
+                    if validation_result.get("diagnosis"):
+                        console.print(f"\n[yellow]🔍 Diagnosis:[/yellow]")
+                        console.print(f"[yellow]   {validation_result['diagnosis']}[/yellow]")
+                    
+                    if validation_result.get("suggested_fix"):
+                        console.print(f"\n[cyan]💡 Suggested Fix:[/cyan]")
+                        console.print(f"[cyan]   {validation_result['suggested_fix']}[/cyan]\n")
+                    
+                    # Mark step as needing attention
+                    step.status = 'needs_attention'
+                    console.print(f"[yellow]⚠️  Step marked as 'needs_attention'[/yellow]")
+                else:
+                    console.print(f"\n[green]✅ Output validated (Confidence: {validation_result.get('confidence', 0)*100:.0f}%)[/green]\n")
 
                 if result.get('status') == 'success':
                     console.print(f"[green]✅ Step {step_num} completed[/green]")
