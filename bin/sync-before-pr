@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Sync script to run before creating a PR
+# Ensures your branch is up-to-date with main to avoid conflicts
+
+set -euo pipefail
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+if [[ "$CURRENT_BRANCH" == "main" ]]; then
+    echo "⚠️  You're on main branch. Please create a feature branch first:"
+    echo "   git checkout -b your-feature-branch"
+    exit 1
+fi
+
+echo "🔄 Syncing branch '$CURRENT_BRANCH' with latest main..."
+
+# Fetch latest
+git fetch origin main
+
+# Check if there are uncommitted changes
+if [[ -n $(git status --porcelain) ]]; then
+    echo "⚠️  You have uncommitted changes. Please commit or stash them first."
+    exit 1
+fi
+
+# Rebase on main
+echo "📌 Rebasing on origin/main..."
+git rebase origin/main
+
+echo "✅ Branch synced! You can now create a PR without conflicts."
+echo ""
+echo "Next steps:"
+echo "1. Push your branch: git push origin $CURRENT_BRANCH --force-with-lease"
+echo "2. Create PR on GitHub"
+
