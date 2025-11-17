@@ -905,6 +905,21 @@ class JiraIntegration:
                 created_range = self._get_created_range(created_rules)
                 safety_enabled = bool(created_range)
                 
+                # Slice-first mode: when a created date range exists, fetch by weekly slices immediately
+                if safety_enabled and _allow_date_slicing:
+                    console.print("[dim]   Slice-first: created window detected, fetching weekly slices for accuracy.[/dim]")
+                    sliced_tickets = self._fetch_with_date_slices(
+                        condition_jql=condition_jql,
+                        order_clause=order_clause,
+                        start_date=created_range[0],  # type: ignore[index]
+                        end_date=created_range[1]     # type: ignore[index]
+                    )
+                    sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
+                    # LLM safety: compact ticket payload
+                    sliced_tickets = [self._compact_ticket_for_llm(t) for t in sliced_tickets]
+                    console.print(f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]")
+                    return sliced_tickets
+                
                 tickets = []
                 start_at = 0
                 page_size = 100  # Jira API max per request
