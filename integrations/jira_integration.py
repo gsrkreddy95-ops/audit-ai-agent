@@ -13,8 +13,8 @@ import os
 import json
 import csv
 import re
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
@@ -31,51 +31,94 @@ class JiraIntegration:
         fields: List[str]
     ) -> Dict[str, Any]:
         """
-        Call Jira search endpoint (prefers POST /rest/api/3/search, falls back to GET /rest/api/3/search/jql)
-        Returns parsed JSON payload.
+        Call Jira search endpoint (GET /rest/api/3/search/jql).
+        Jira removed the POST /search endpoint for Cloud instances.
         """
         server = self.jira._options['server']
-        last_error = None
         fields_param = ",".join(fields)
-        endpoints = [
-            ("POST", f"{server}/rest/api/3/search"),
-            ("GET", f"{server}/rest/api/3/search/jql"),
-        ]
-        
-        for method, url in endpoints:
-            try:
-                if method == "POST":
-                    payload = {
-                        "jql": jql_query,
-                        "startAt": start_at,
-                        "maxResults": max_results,
-                        "fields": fields,
-                        "fieldsByKeys": False,
-                        "expand": []
-                    }
-                    response = self.jira._session.post(url, json=payload)
-                else:
-                    params = {
-                        "jql": jql_query,
-                        "startAt": start_at,
-                        "maxResults": max_results,
-                        "fields": fields_param
-                    }
-                    response = self.jira._session.get(url, params=params)
-                
-                if start_at == 0:
-                    console.print(
-                        f"[dim]   API Request: {method} {url.replace(server, '')} (startAt={start_at}, maxResults={max_results})[/dim]"
-                    )
-                response.raise_for_status()
-                return response.json()
-            except Exception as error:
-                last_error = error
+        try:
+            params = {
+                "jql": jql_query,
+                "startAt": start_at,
+                "maxResults": max_results,
+                "fields": fields_param
+            }
+            response = self.jira._session.get(
+                f"{server}/rest/api/3/search/jql",
+                params=params
+            )
+            if start_at == 0:
                 console.print(
-                    f"[yellow]⚠️  Jira {method} {url.replace(server, '')} failed: {error}. Trying fallback endpoint...[/yellow]"
+                    f"[dim]   API Request: GET /rest/api/3/search/jql (startAt={start_at}, maxResults={max_results})[/dim]"
                 )
-        
-        raise last_error  # type: ignore[arg-type]
+            response.raise_for_status()
+            return response.json()
+        except Exception as error:
+            console.print(f"[red]❌ Jira search request failed: {error}[/red]")
+            raise
+
+    @staticmethod
+    def _generate_date_slices(start_date: datetime, end_date: datetime, slice_days: int = 7) -> List[Tuple[datetime, datetime]]:
+        """Generate inclusive date slices between start_date and end_date."""
+        slices: List[Tuple[datetime, datetime]] = []
+        current = start_date
+        while current <= end_date:
+            slice_end = min(current + timedelta(days=slice_days - 1), end_date)
+            slices.append((current, slice_end))
+            current = slice_end + timedelta(days=1)
+        return slices
+
+    def _fetch_with_date_slices(
+        self,
+        base_jql: str,
+        start_date: datetime,
+        end_date: datetime
+    ) -> List[Dict[str, Any]]:
+        """Split the date range into smaller slices and aggregate results."""
+        slices = self._generate_date_slices(start_date, end_date)
+        total_slices = len(slices)
+        console.print(
+            f"[yellow]⚠️  Jira returned the 1000-ticket safety cap. "
+            f"Applying date slicing across {total_slices} slices to fetch exact results.[/yellow]"
+        )
+        aggregated: List[Dict[str, Any]] = []
+        for idx, (slice_start, slice_end) in enumerate(slices, start=1):
+            slice_jql = (
+                f"({base_jql}) AND created >= '{slice_start.strftime('%Y-%m-%d')}' "
+                f"AND created <= '{slice_end.strftime('%Y-%m-%d')}' ORDER BY created ASC"
+            )
+            console.print(
+                f"[cyan]   📅 Slice {idx}/{total_slices}: "
+                f"{slice_start.strftime('%Y-%m-%d')} → {slice_end.strftime('%Y-%m-%d')}[/cyan]"
+            )
+            slice_tickets = self.search_jql(
+                jql_query=slice_jql,
+                max_results=0,
+                paginate=True,
+                board_name=None,
+                _allow_date_slicing=False
+            )
+            aggregated.extend(slice_tickets)
+        return aggregated
+
+    @staticmethod
+    def _get_created_range(created_rules: Optional[Dict[str, datetime]]) -> Optional[Tuple[datetime, datetime]]:
+        """Derive inclusive start/end dates from created rules."""
+        if not created_rules:
+            return None
+        start_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None
+        if '>=' in created_rules:
+            start_date = created_rules['>=']
+        elif '>' in created_rules:
+            start_date = created_rules['>'] + timedelta(days=1)
+        if '<=' in created_rules:
+            end_date = created_rules['<=']
+        elif '<' in created_rules:
+            end_date = created_rules['<'] - timedelta(days=1)
+        if start_date and end_date and start_date <= end_date:
+            return (start_date, end_date)
+        return None
 
     """Jira API Integration for ticket management"""
     
@@ -801,7 +844,8 @@ class JiraIntegration:
         jql_query: str,
         max_results: int = 0,
         paginate: bool = True,
-        board_name: Optional[str] = None
+        board_name: Optional[str] = None,
+        _allow_date_slicing: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Advanced JQL search with automatic pagination
@@ -820,6 +864,7 @@ class JiraIntegration:
         
         try:
             jql_query = self._augment_jql_with_board_filter(jql_query, board_name)
+            base_jql = jql_query
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
             # Jira API limits to 100 per request, so we need pagination
@@ -936,6 +981,31 @@ class JiraIntegration:
                         break
                     
                     start_at += current_page_size
+                
+                if (
+                    _allow_date_slicing
+                    and effective_max == SAFETY_LIMIT
+                    and total_fetched >= effective_max
+                ):
+                    filters_for_slicing = self._extract_post_filters_from_jql(jql_query)
+                    created_rules = filters_for_slicing.get('created')
+                    created_range = self._get_created_range(created_rules)
+                    if created_range:
+                        sliced_tickets = self._fetch_with_date_slices(
+                            base_jql=jql_query,
+                            start_date=created_range[0],
+                            end_date=created_range[1]
+                        )
+                        sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
+                        console.print(
+                            f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]"
+                        )
+                        return sliced_tickets
+                    else:
+                        console.print(
+                            "[yellow]⚠️  Unable to derive created date range for slicing. "
+                            "Returning safety-limited results.[/yellow]"
+                        )
                 
                 tickets = self._apply_post_filters(tickets, jql_query)
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
