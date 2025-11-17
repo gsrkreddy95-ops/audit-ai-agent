@@ -698,7 +698,12 @@ class JiraIntegration:
                 page_size = 100  # Jira API max per request
                 total_fetched = 0
                 
-                console.print(f"[cyan]📄 Fetching results with pagination (max: {max_results if max_results > 0 else 'all'})...[/cyan]")
+                # SAFETY: If Jira API is ignoring filters, cap at 1000 and rely on post-filter
+                SAFETY_LIMIT = 1000
+                effective_max = max_results if max_results > 0 else SAFETY_LIMIT
+                
+                console.print(f"[cyan]📄 Fetching results with pagination (max: {effective_max})...[/cyan]")
+                console.print(f"[dim]   Safety limit: {SAFETY_LIMIT} tickets (post-filter will apply exact JQL constraints)[/dim]")
                 
                 total_available = None  # Will be set after first request
                 
@@ -706,14 +711,13 @@ class JiraIntegration:
                     # Fetch a page of results using Jira Cloud's new JQL API
                     try:
                         # NOTE: /search/jql is a POST endpoint with JSON body
-                        # Determine current page size respecting user max_results limit
+                        # Determine current page size respecting limits
                         current_page_size = page_size
-                        if max_results > 0:
-                            remaining = max_results - total_fetched
-                            if remaining <= 0:
-                                console.print(f"[dim]   Already fetched requested max results ({max_results}).[/dim]")
-                                break
-                            current_page_size = min(page_size, remaining)
+                        remaining = effective_max - total_fetched
+                        if remaining <= 0:
+                            console.print(f"[dim]   Safety limit reached ({effective_max}). Stopping pagination.[/dim]")
+                            break
+                        current_page_size = min(page_size, remaining)
                         
                         # Use GET /rest/api/3/search/jql (the /search POST endpoint was removed by Jira)
                         response = self.jira._session.get(
@@ -783,6 +787,13 @@ class JiraIntegration:
                     
                     console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
                     
+                    # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
+                    # and Jira is clearly ignoring filters, stop and rely on post-filter
+                    if total_available > 0 and total_fetched > (total_available * 3):
+                        console.print(f"[yellow]⚠️  Fetched {total_fetched} tickets but Jira reported total={total_available}[/yellow]")
+                        console.print(f"[yellow]   Jira API is ignoring filters. Stopping pagination and applying post-filter...[/yellow]")
+                        break
+                    
                     # Check stopping conditions
                     # 1. No more results on this page (most reliable indicator)
                     if len(page_issues) < current_page_size:
@@ -794,9 +805,9 @@ class JiraIntegration:
                         console.print(f"[dim]   All available tickets fetched ({total_fetched}/{total_available})[/dim]")
                         break
                     
-                    # 3. Hit the user-specified max_results limit
-                    if max_results > 0 and total_fetched >= max_results:
-                        console.print(f"[dim]   Max results limit reached ({total_fetched}/{max_results})[/dim]")
+                    # 3. Hit the safety/user-specified limit
+                    if total_fetched >= effective_max:
+                        console.print(f"[dim]   Limit reached ({total_fetched}/{effective_max})[/dim]")
                         break
                     
                     start_at += current_page_size
