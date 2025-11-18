@@ -1099,6 +1099,14 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                         "type": "string",
                         "description": "Optional board/dashboard name (e.g., 'XDR SRE Sprint', 'XDR Platform Ops')"
                     },
+                    "space": {
+                        "type": "string",
+                        "description": "Optional Jira space/team alias (e.g., 'XDR-SRE', 'ALL WORK') to auto-apply saved scopes."
+                    },
+                    "filter_id": {
+                        "type": "string",
+                        "description": "Optional saved filter ID to intersect with your JQL (e.g., '32310')."
+                    },
                     "export_format": {
                         "type": "string",
                         "enum": ["json", "csv"],
@@ -1167,6 +1175,14 @@ The agent will:
                     "board_name": {
                         "type": "string",
                         "description": "Optional board name to merge its saved filter JQL"
+                    },
+                    "space": {
+                        "type": "string",
+                        "description": "Optional Jira space/team alias (e.g., 'XDR-SRE', 'ALL WORK')"
+                    },
+                    "filter_id": {
+                        "type": "string",
+                        "description": "Optional saved filter ID to intersect."
                     },
                     "max_results": {
                         "type": "integer",

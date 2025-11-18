@@ -13,7 +13,7 @@ import os
 import json
 import csv
 import re
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -25,10 +25,13 @@ DEFAULT_JIRA_EVIDENCE_FOLDER = os.getenv('DEFAULT_JIRA_EVIDENCE_FOLDER', 'JIRA-E
 
 
 class JiraIntegration:
-    DEFAULT_SCOPE_MAP = {
-        "XDR": {
-            "board": os.getenv("JIRA_DEFAULT_BOARD_XDR", ""),
-            "filter": os.getenv("JIRA_DEFAULT_FILTER_XDR", "All work"),
+    SPACE_SCOPE_MAP = {
+        "ALL WORK": {
+            "filter_id": os.getenv("JIRA_SPACE_ALL_WORK_FILTER_ID", "32310")
+        },
+        "XDR-SRE": {
+            "board_name": os.getenv("JIRA_SPACE_XDR_SRE_BOARD", "XDR SRE Sprint"),
+            "project_key": "XDR"
         }
     }
     def _get_export_directory(self, rfi_code: Optional[str]) -> Path:
@@ -235,7 +238,9 @@ class JiraIntegration:
         assignee: Optional[str] = None,
         text_contains: Optional[str] = None,
         order_by: Optional[str] = "created ASC",
-        board_name: Optional[str] = None
+        board_name: Optional[str] = None,
+        space: Optional[str] = None,
+        filter_id: Optional[Union[str, int]] = None
     ) -> str:
         """
         Build robust JQL from natural-language style inputs.
@@ -319,44 +324,49 @@ class JiraIntegration:
             clauses.append(f'text ~ "{safe_text}"')
         base = " AND ".join(clauses) if clauses else ""
         # Merge board filter if provided
-        effective_board = board_name
-        effective_filter = None
-        if not effective_board:
-            effective_board, effective_filter = self._derive_default_scope_for_jql(base)
-        if effective_board:
-            filter_jql = self._get_board_filter_jql(effective_board, self._extract_project_key_from_jql(base))
+        if board_name:
+            filter_jql = self._get_board_filter_jql(board_name, self._extract_project_key_from_jql(base))
             if filter_jql:
                 base = f"({filter_jql}) AND ({base})" if base else filter_jql
-                effective_filter = None  # board already applied
-        if effective_filter:
-            base, _ = self._apply_saved_filter_to_jql(base, effective_filter)
+        if space:
+            base, _ = self._augment_with_space_scope(base, space)
+        if filter_id:
+            base, _ = self._apply_filter_id(base, str(filter_id))
         if order_by:
             return f"{base} ORDER BY {order_by}"
         return base
 
-    def _derive_default_scope_for_jql(self, jql_query: str) -> Tuple[Optional[str], Optional[str]]:
-        """Return project-specific default board/filter names if configured."""
-        project_key = self._extract_project_key_from_jql(jql_query or "")
-        if not project_key:
-            return None, None
-        scope = self.DEFAULT_SCOPE_MAP.get(project_key.upper(), {})
-        board_name = (scope.get("board") or "").strip() or None
-        filter_name = (scope.get("filter") or "").strip() or None
-        if board_name:
-            console.print(f"[dim]   Applying default board '{board_name}' for project {project_key}[/dim]")
-        elif filter_name:
-            console.print(f"[dim]   Applying default filter '{filter_name}' for project {project_key}[/dim]")
-        return board_name, filter_name
-
-    def _apply_saved_filter_to_jql(self, base_jql: str, filter_name: Optional[str]) -> Tuple[str, bool]:
-        """Combine base JQL with a saved filter if available."""
-        if not filter_name:
+    def _apply_filter_id(self, base_jql: str, filter_id: Optional[str]) -> Tuple[str, bool]:
+        """Combine base JQL with a saved filter identified by ID."""
+        if not filter_id:
             return base_jql, False
-        filter_jql = self._get_saved_filter_jql(filter_name)
+        filter_jql = self._get_filter_jql_by_id(filter_id)
         if not filter_jql:
             return base_jql, False
         combined = f"({filter_jql}) AND ({base_jql})" if base_jql else filter_jql
         return combined, True
+    
+    def _augment_with_space_scope(self, base_jql: str, space: str) -> Tuple[str, bool]:
+        """Apply pre-defined scope (board/filter) associated with a space alias."""
+        if not space:
+            return base_jql, False
+        config = self.SPACE_SCOPE_MAP.get(space.strip().upper())
+        if not config:
+            console.print(f"[yellow]⚠️  Space '{space}' not recognized. Skipping space scope.[/yellow]")
+            return base_jql, False
+        applied = False
+        board_name = config.get("board_name")
+        project_hint = config.get("project_key")
+        if board_name:
+            filter_jql = self._get_board_filter_jql(board_name, project_hint or self._extract_project_key_from_jql(base_jql))
+            if filter_jql:
+                base_jql = f"({filter_jql}) AND ({base_jql})" if base_jql else filter_jql
+                applied = True
+        filter_id = config.get("filter_id")
+        if filter_id:
+            base_jql, filter_applied = self._apply_filter_id(base_jql, str(filter_id))
+            applied = applied or filter_applied
+        return base_jql, applied
 
     @staticmethod
     def _get_created_range(created_rules: Optional[Dict[str, datetime]]) -> Optional[Tuple[datetime, datetime]]:
@@ -1173,6 +1183,23 @@ class JiraIntegration:
         except Exception as exc:
             console.print(f"[yellow]⚠️  Failed to resolve filter '{filter_name}': {exc}[/yellow]")
             return None
+
+    def _get_filter_jql_by_id(self, filter_id: str) -> Optional[str]:
+        """Fetch saved filter JQL by ID."""
+        if not filter_id:
+            return None
+        try:
+            server = self.jira._options['server']
+            response = self.jira._session.get(f"{server}/rest/api/3/filter/{filter_id}")
+            response.raise_for_status()
+            data = response.json()
+            jql = data.get("jql")
+            if jql:
+                console.print(f"[dim]   Applying filter ID {filter_id}[/dim]")
+            return jql
+        except Exception as exc:
+            console.print(f"[yellow]⚠️  Failed to resolve filter ID {filter_id}: {exc}[/yellow]")
+            return None
     
     def list_tickets(
         self,
@@ -1267,6 +1294,8 @@ class JiraIntegration:
         max_results: int = 0,
         paginate: bool = True,
         board_name: Optional[str] = None,
+        space: Optional[str] = None,
+        filter_id: Optional[Union[str, int]] = None,
         _allow_date_slicing: bool = True
     ) -> List[Dict[str, Any]]:
         """
@@ -1285,15 +1314,12 @@ class JiraIntegration:
             return []
         
         try:
-            effective_board = board_name
-            effective_filter = None
-            if not effective_board:
-                effective_board, effective_filter = self._derive_default_scope_for_jql(jql_query)
-            jql_query = self._augment_jql_with_board_filter(jql_query, effective_board)
-            if effective_filter:
-                jql_query, filter_applied = self._apply_saved_filter_to_jql(jql_query, effective_filter)
-                if filter_applied:
-                    jql_query = self._normalize_jql_dates(jql_query)
+            jql_query = self._normalize_jql_dates(jql_query or "")
+            if space:
+                jql_query, _ = self._augment_with_space_scope(jql_query, space)
+            if filter_id:
+                jql_query, _ = self._apply_filter_id(jql_query, str(filter_id))
+            jql_query = self._augment_jql_with_board_filter(jql_query, board_name)
             condition_jql, order_clause = self._split_condition_and_order(jql_query)
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             

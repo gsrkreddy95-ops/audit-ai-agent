@@ -2325,7 +2325,9 @@ class ToolExecutor:
                 jql_query=params.get('jql_query'),
                 max_results=params.get('max_results', 0),  # Default to 0 = fetch ALL matching tickets
                 paginate=params.get('paginate', True),  # Enable pagination by default
-                board_name=params.get('board_name')
+                board_name=params.get('board_name'),
+                space=params.get('space'),
+                filter_id=params.get('filter_id')
             )
             analytics = self._summarize_jira_tickets(tickets)
             
@@ -2432,7 +2434,9 @@ class ToolExecutor:
                 assignee=assignee,
                 text_contains=text_contains,
                 order_by=order_by,
-                board_name=board_name
+                board_name=board_name,
+                space=params.get('space'),
+                filter_id=params.get('filter_id')
             )
             
             console.print(f"[cyan]🧠 Intent → JQL: {jql}[/cyan]")
@@ -2441,7 +2445,9 @@ class ToolExecutor:
                 jql_query=jql,
                 max_results=params.get('max_results', 0),
                 paginate=params.get('paginate', True),
-                board_name=None  # already merged via builder if provided
+                board_name=None,  # already merged via builder if provided
+                space=params.get('space'),
+                filter_id=params.get('filter_id')
             )
             
             analytics = self._summarize_jira_tickets(tickets)
