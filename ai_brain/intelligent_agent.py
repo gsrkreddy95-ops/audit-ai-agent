@@ -13,6 +13,7 @@ from rich.console import Console
 from .llm_config import LLMFactory
 from .tools_definition import get_tool_definitions
 from .tool_executor import ToolExecutor
+from .conversation_history import ConversationHistory
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from evidence_manager.local_evidence_manager import LocalEvidenceManager
@@ -52,6 +53,10 @@ class IntelligentAgent:
         self.tools = get_tool_definitions()
         self.conversation_history = []
         
+        # Initialize persistent conversation history
+        max_history = int(os.getenv('CHAT_HISTORY_MAX_EXCHANGES', '20'))
+        self.persistent_history = ConversationHistory(max_exchanges=max_history)
+        
         console.print(f"[green]✅ Ready![/green]")
         console.print(f"[dim]Evidence: {self.evidence_manager.evidence_dir}[/dim]")
         console.print(f"[dim]Tools: {len(self.tools)} available[/dim]\n")
@@ -79,6 +84,17 @@ class IntelligentAgent:
                 "role": "assistant",
                 "content": response
             })
+            
+            # Save to persistent history with tool call tracking
+            tool_calls_summary = []
+            if hasattr(self, '_last_tool_calls'):
+                tool_calls_summary = self._last_tool_calls
+            if hasattr(self, 'persistent_history'):
+                self.persistent_history.add_exchange(
+                    user_message=user_input,
+                    agent_response=response,
+                    tool_calls=tool_calls_summary
+                )
             
             return response
         
@@ -263,7 +279,15 @@ class IntelligentAgent:
         current_date = datetime.now().strftime("%B %d, %Y")
         current_year = datetime.now().year
         
+        # Inject recent conversation context
+        context_snippet = ""
+        if hasattr(self, 'persistent_history'):
+            context_snippet = self.persistent_history.get_context_for_llm(limit=3)
+            if context_snippet:
+                context_snippet = f"\n\n📜 RECENT CONVERSATION CONTEXT:\n{context_snippet}\n\n"
+        
         return f"""You are AuditMate, an intelligent audit evidence collection assistant powered by Claude 3.5 Sonnet.
+{context_snippet}
 
 ⏰ CRITICAL: Today's date is {current_date}. The current year is {current_year}.
 When users mention dates like "2025", "today", "this year", or "till now", use {current_year} as the reference year.
@@ -1279,6 +1303,17 @@ Use your intelligence to decide the best approach for each request!"""
         """Clear conversation history"""
         self.conversation_history = []
         console.print("[yellow]🧹 Conversation cleared[/yellow]")
+    
+    def clear_conversation_history(self):
+        """Clear persistent conversation history"""
+        if hasattr(self, 'persistent_history'):
+            self.persistent_history.clear()
+    
+    def get_conversation_history(self) -> List[Dict[str, Any]]:
+        """Get all persistent conversation exchanges"""
+        if hasattr(self, 'persistent_history'):
+            return self.persistent_history.get_all_exchanges()
+        return []
     
     def cleanup(self):
         """Cleanup resources"""

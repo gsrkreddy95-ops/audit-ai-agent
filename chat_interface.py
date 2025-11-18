@@ -12,6 +12,9 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.prompt import Prompt
 from dotenv import load_dotenv
+from prompt_toolkit import PromptSession
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
@@ -142,14 +145,23 @@ def main():
         console.print(f"[yellow]Check your .env file configuration[/yellow]")
         sys.exit(1)
     
+    # Initialize prompt session with history support
+    history_file = os.path.join(os.path.dirname(__file__), '.chat_history')
+    session = PromptSession(
+        history=FileHistory(history_file),
+        auto_suggest=AutoSuggestFromHistory(),
+        enable_history_search=True
+    )
+    
     # Show initial prompt
     console.print("[bold cyan]💬 How can I help you today?[/bold cyan]")
+    console.print("[dim]💡 Tip: Use ↑/↓ arrow keys to navigate previous commands[/dim]")
     
     # Main chat loop
     while True:
         try:
-            # Get user input
-            user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+            # Get user input with history support
+            user_input = session.prompt("\n[You] > ", style='cyan bold')
             
             if not user_input.strip():
                 continue
@@ -169,6 +181,27 @@ def main():
                 agent.clear_memory()
                 console.clear()
                 print_welcome()
+                continue
+            
+            elif user_input_lower == 'clear history':
+                # Clear command history file
+                if os.path.exists(history_file):
+                    os.remove(history_file)
+                agent.clear_conversation_history()
+                console.print("[green]✅ Chat history cleared[/green]")
+                continue
+            
+            elif user_input_lower == 'show history':
+                # Display recent conversation history
+                history = agent.get_conversation_history()
+                if not history:
+                    console.print("[yellow]No conversation history yet[/yellow]")
+                else:
+                    console.print(f"\n[cyan]📜 Recent Conversation ({len(history)} exchanges):[/cyan]")
+                    for i, exchange in enumerate(history[-10:], 1):
+                        console.print(f"\n[bold]#{i}:[/bold]")
+                        console.print(f"  [cyan]User:[/cyan] {exchange.get('user', '')[:100]}...")
+                        console.print(f"  [green]Agent:[/green] {exchange.get('agent', '')[:100]}...")
                 continue
             
             elif user_input_lower == 'status':
