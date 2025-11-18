@@ -700,7 +700,15 @@ class JiraIntegration:
         filters: Dict[str, Any] = {
             'created': {},
             'labels': set(),
-            'project_keys': set()
+            'project_keys': set(),
+            'statuses': {
+                'include': set(),
+                'exclude': set()
+            },
+            'status_categories': {
+                'include': set(),
+                'exclude': set()
+            }
         }
         if not jql_query:
             return filters
@@ -755,6 +763,60 @@ class JiraIntegration:
                 if item:
                     filters['labels'].add(item.lower())
         
+        # Status filters (status =, status !=, status in (...), status not in (...))
+        status_eq_pattern = re.compile(r'\bstatus\s*=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s]+))', re.IGNORECASE)
+        for match in status_eq_pattern.findall(jql_query):
+            value = next((grp for grp in match if grp), '').strip()
+            if value:
+                filters['statuses']['include'].add(value.lower())
+        
+        status_neq_pattern = re.compile(r'\bstatus\s*!=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s]+))', re.IGNORECASE)
+        for match in status_neq_pattern.findall(jql_query):
+            value = next((grp for grp in match if grp), '').strip()
+            if value:
+                filters['statuses']['exclude'].add(value.lower())
+        
+        status_in_pattern = re.compile(r'\bstatus\s+in\s*\(([^)]+)\)', re.IGNORECASE)
+        for group in status_in_pattern.findall(jql_query):
+            items = [item.strip().strip('\'"') for item in group.split(',')]
+            for item in items:
+                if item:
+                    filters['statuses']['include'].add(item.lower())
+        
+        status_not_in_pattern = re.compile(r'\bstatus\s+not\s+in\s*\(([^)]+)\)', re.IGNORECASE)
+        for group in status_not_in_pattern.findall(jql_query):
+            items = [item.strip().strip('\'"') for item in group.split(',')]
+            for item in items:
+                if item:
+                    filters['statuses']['exclude'].add(item.lower())
+        
+        # Status category filters
+        status_cat_eq_pattern = re.compile(r'\bstatusCategory\s*=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s]+))', re.IGNORECASE)
+        for match in status_cat_eq_pattern.findall(jql_query):
+            value = next((grp for grp in match if grp), '').strip()
+            if value:
+                filters['status_categories']['include'].add(value.lower())
+        
+        status_cat_neq_pattern = re.compile(r'\bstatusCategory\s*!=\s*(?:"([^"]+)"|\'([^\']+)\'|([^\s]+))', re.IGNORECASE)
+        for match in status_cat_neq_pattern.findall(jql_query):
+            value = next((grp for grp in match if grp), '').strip()
+            if value:
+                filters['status_categories']['exclude'].add(value.lower())
+        
+        status_cat_in_pattern = re.compile(r'\bstatusCategory\s+in\s*\(([^)]+)\)', re.IGNORECASE)
+        for group in status_cat_in_pattern.findall(jql_query):
+            items = [item.strip().strip('\'"') for item in group.split(',')]
+            for item in items:
+                if item:
+                    filters['status_categories']['include'].add(item.lower())
+        
+        status_cat_not_in_pattern = re.compile(r'\bstatusCategory\s+not\s+in\s*\(([^)]+)\)', re.IGNORECASE)
+        for group in status_cat_not_in_pattern.findall(jql_query):
+            items = [item.strip().strip('\'"') for item in group.split(',')]
+            for item in items:
+                if item:
+                    filters['status_categories']['exclude'].add(item.lower())
+        
         # Project filters (project = KEY or project in (KEY1, KEY2))
         project_eq_pattern = re.compile(r"project\s*=\s*['\"]?([A-Z0-9_-]+)['\"]?", re.IGNORECASE)
         for match in project_eq_pattern.findall(jql_query):
@@ -776,6 +838,10 @@ class JiraIntegration:
             filters.pop('created', None)
         if not filters['project_keys']:
             filters.pop('project_keys', None)
+        if not filters['statuses']['include'] and not filters['statuses']['exclude']:
+            filters.pop('statuses', None)
+        if not filters['status_categories']['include'] and not filters['status_categories']['exclude']:
+            filters.pop('status_categories', None)
         
         # DEBUG: Log final extracted filters
         console.print(f"[dim]   🔍 Extracted filters: created={filters.get('created')}, labels={filters.get('labels')}, project_keys={filters.get('project_keys')}[/dim]")
@@ -794,8 +860,27 @@ class JiraIntegration:
             return tickets
         
         filtered: List[Dict[str, Any]] = []
-        dropped_reasons = {'created': 0, 'labels': 0, 'project': 0}
+        dropped_reasons = {
+            'created': 0,
+            'labels': 0,
+            'project': 0,
+            'status': 0,
+            'status_category': 0
+        }
         sample_dropped = []  # Track first few dropped tickets for debugging
+        status_filters = filters.get('statuses')
+        status_include = set()
+        status_exclude = set()
+        if status_filters:
+            status_include = {s.lower() for s in status_filters.get('include', set())}
+            status_exclude = {s.lower() for s in status_filters.get('exclude', set())}
+        
+        status_cat_filters = filters.get('status_categories')
+        status_cat_include = set()
+        status_cat_exclude = set()
+        if status_cat_filters:
+            status_cat_include = {s.lower() for s in status_cat_filters.get('include', set())}
+            status_cat_exclude = {s.lower() for s in status_cat_filters.get('exclude', set())}
         
         for ticket in tickets:
             include = True
@@ -860,6 +945,30 @@ class JiraIntegration:
                     drop_reason = f"key {key} doesn't match project prefixes {filters['project_keys']}"
                     dropped_reasons['project'] += 1
             
+            # Status filters (include/exclude)
+            if include and (status_include or status_exclude):
+                ticket_status = (ticket.get('status') or '').strip().lower()
+                if status_include and ticket_status not in status_include:
+                    include = False
+                    drop_reason = f"status {ticket_status} not in required set {status_include}"
+                    dropped_reasons['status'] += 1
+                elif status_exclude and ticket_status in status_exclude:
+                    include = False
+                    drop_reason = f"status {ticket_status} in excluded set {status_exclude}"
+                    dropped_reasons['status'] += 1
+            
+            # Status category filters
+            if include and (status_cat_include or status_cat_exclude):
+                ticket_status_category = (ticket.get('status_category') or '').strip().lower()
+                if status_cat_include and ticket_status_category not in status_cat_include:
+                    include = False
+                    drop_reason = f"status category {ticket_status_category} not in required set {status_cat_include}"
+                    dropped_reasons['status_category'] += 1
+                elif status_cat_exclude and ticket_status_category in status_cat_exclude:
+                    include = False
+                    drop_reason = f"status category {ticket_status_category} in excluded set {status_cat_exclude}"
+                    dropped_reasons['status_category'] += 1
+            
             if include:
                 filtered.append(ticket)
             elif len(sample_dropped) < 3:
@@ -871,7 +980,9 @@ class JiraIntegration:
                 f"[yellow]   🔍 Post-filter reduced tickets from {len(tickets)} to {len(filtered)} "
                 f"(created drops: {dropped_reasons.get('created', 0)}, "
                 f"labels drops: {dropped_reasons.get('labels', 0)}, "
-                f"project drops: {dropped_reasons.get('project', 0)})[/yellow]"
+                f"project drops: {dropped_reasons.get('project', 0)}, "
+                f"status drops: {dropped_reasons.get('status', 0)}, "
+                f"status category drops: {dropped_reasons.get('status_category', 0)})[/yellow]"
             )
             if sample_dropped:
                 console.print(f"[dim]      Sample drops: {', '.join(sample_dropped)}[/dim]")
