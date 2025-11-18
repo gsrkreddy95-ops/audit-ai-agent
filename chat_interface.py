@@ -161,7 +161,7 @@ def main():
     while True:
         try:
             # Get user input with history support
-            user_input = session.prompt("\n[You] > ", style='cyan bold')
+            user_input = session.prompt("\n[You] > ")
             
             if not user_input.strip():
                 continue
