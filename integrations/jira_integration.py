@@ -1324,12 +1324,21 @@ class JiraIntegration:
             return ""
         
         try:
+            # Determine base evidence directory
+            evidence_base = os.getenv('LOCAL_EVIDENCE_PATH')
+            if not evidence_base:
+                evidence_base = str(Path.home() / "Documents" / "audit-evidence")
+            current_year = os.getenv('SHAREPOINT_CURRENT_YEAR', 'FY2025')
+            jira_dir = Path(evidence_base) / current_year / "JIRA_EXPORTS"
+            
             # Generate output filename if not provided
             if not output_file:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
                 output_file = f"jira_tickets_{timestamp}.{output_format}"
             
             output_path = Path(output_file)
+            if not output_path.is_absolute():
+                output_path = jira_dir / output_path
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
             if output_format == 'csv':
