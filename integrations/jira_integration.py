@@ -1338,12 +1338,16 @@ class JiraIntegration:
             return []
         
         try:
+            # Normalize JQL and ensure deterministic ordering for pagination
             jql_query = self._normalize_jql_dates(jql_query or "")
             if space:
                 jql_query, _ = self._augment_with_space_scope(jql_query, space)
             if filter_id:
                 jql_query, _ = self._apply_filter_id(jql_query, str(filter_id))
             jql_query = self._augment_jql_with_board_filter(jql_query, board_name)
+            if "order by" not in jql_query.lower():
+                jql_query = f"{jql_query} ORDER BY created DESC"
+                console.print("[dim]   Added default ORDER BY created DESC for stable pagination[/dim]")
             condition_jql, order_clause = self._split_condition_and_order(jql_query)
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
