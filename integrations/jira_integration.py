@@ -1351,6 +1351,7 @@ class JiraIntegration:
                 total_fetched = 0
                 log_interval = max(int(os.getenv("JIRA_PAGINATION_LOG_INTERVAL", "500")), 100)
                 next_log_threshold = log_interval
+                seen_keys: set = set()
                 
                 MAX_NO_DATE_RESULTS = 5000
                 guard_triggered = False
@@ -1444,18 +1445,31 @@ class JiraIntegration:
                         break  # No more results
                     
                     # Process this page
+                    new_issues_added = 0
                     for issue in page_issues:
+                        ticket_key = getattr(issue, 'key', None)
+                        if ticket_key and ticket_key in seen_keys:
+                            continue
                         ticket = self._build_ticket_dict(issue)
                         tickets.append(ticket)
+                        if ticket_key:
+                            seen_keys.add(ticket_key)
                         total_fetched += 1
+                        new_issues_added += 1
                         
-                        # Check if we've hit the max_results limit
                         if max_results > 0 and total_fetched >= max_results:
                             break
                     
                     if total_fetched >= next_log_threshold:
                         console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
                         next_log_threshold += log_interval
+                    
+                    if new_issues_added == 0:
+                        console.print(
+                            "[yellow]⚠️  Jira returned a duplicate page (pagination ignored). "
+                            "Stopping further fetches to avoid infinite loop.[/yellow]"
+                        )
+                        break
                     
                     # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
                     # and Jira is clearly ignoring filters, stop and rely on post-filter
