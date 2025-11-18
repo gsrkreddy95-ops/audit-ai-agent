@@ -93,6 +93,30 @@ class JiraIntegration:
             return condition, order_clause
         return jql_query.strip(), ''
 
+    @staticmethod
+    def _merge_jql(base_jql: str, overlay_jql: str) -> str:
+        """
+        Merge two JQL strings by AND-ing their conditions while preserving the base ORDER BY.
+        Overlay's ORDER BY (if any) is ignored.
+        """
+        base_condition, base_order = JiraIntegration._split_condition_and_order(base_jql)
+        overlay_condition, _ = JiraIntegration._split_condition_and_order(overlay_jql)
+        
+        if overlay_condition and base_condition:
+            merged_condition = f"({overlay_condition}) AND ({base_condition})"
+        elif overlay_condition:
+            merged_condition = overlay_condition
+        else:
+            merged_condition = base_condition
+        
+        merged_condition = merged_condition.strip()
+        if not merged_condition:
+            return base_jql  # Nothing to merge
+        
+        if base_order:
+            return f"{merged_condition} {base_order}"
+        return merged_condition
+
     def _fetch_with_date_slices(
         self,
         condition_jql: str,
@@ -343,7 +367,7 @@ class JiraIntegration:
         filter_jql = self._get_filter_jql_by_id(filter_id)
         if not filter_jql:
             return base_jql, False
-        combined = f"({filter_jql}) AND ({base_jql})" if base_jql else filter_jql
+        combined = self._merge_jql(base_jql, filter_jql)
         return combined, True
     
     def _augment_with_space_scope(self, base_jql: str, space: str) -> Tuple[str, bool]:
@@ -360,7 +384,7 @@ class JiraIntegration:
         if board_name:
             filter_jql = self._get_board_filter_jql(board_name, project_hint or self._extract_project_key_from_jql(base_jql))
             if filter_jql:
-                base_jql = f"({filter_jql}) AND ({base_jql})" if base_jql else filter_jql
+                base_jql = self._merge_jql(base_jql, filter_jql)
                 applied = True
         filter_id = config.get("filter_id")
         if filter_id:
