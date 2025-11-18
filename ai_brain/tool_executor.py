@@ -6,7 +6,7 @@ import os
 import time  # ← SELF-HEAL FIX: Added for time.sleep() calls
 from dataclasses import asdict
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+import datetime as dt
 from collections import Counter
 from pathlib import Path
 from rich.console import Console
@@ -724,7 +724,7 @@ class ToolExecutor:
                 }
             
             # Create output filename
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
             resource_part = f"_{resource_name}" if resource_name else f"_{resource_type}" if resource_type else ""
             filename = f"{service}{resource_part}_{region}_{timestamp}.png"
             
@@ -1183,7 +1183,7 @@ class ToolExecutor:
             
             # Auto-fill end_date if missing but start_date provided (assume "till today")
             if filter_by_date and start_date and not end_date:
-                end_date = datetime.now().strftime('%Y-%m-%d')
+                end_date = dt.datetime.now().strftime('%Y-%m-%d')
                 console.print(f"[yellow]ℹ️  Auto-filled end_date: {end_date} (till today)[/yellow]")
             
             if filter_by_date and not (audit_period or (start_date and end_date)):
@@ -1192,7 +1192,7 @@ class ToolExecutor:
                     "error": "filter_by_date requires either audit_period or start/end dates"
                 }
             
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            timestamp = dt.datetime.now().strftime('%Y%m%d_%H%M%S')
             rfi_dir = self.evidence_manager.get_rfi_directory(rfi_code)
             
             successes = []
