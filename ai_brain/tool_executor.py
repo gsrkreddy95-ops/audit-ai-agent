@@ -1183,7 +1183,6 @@ class ToolExecutor:
             
             # Auto-fill end_date if missing but start_date provided (assume "till today")
             if filter_by_date and start_date and not end_date:
-                from datetime import datetime
                 end_date = datetime.now().strftime('%Y-%m-%d')
                 console.print(f"[yellow]ℹ️  Auto-filled end_date: {end_date} (till today)[/yellow]")
             

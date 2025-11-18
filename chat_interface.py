@@ -131,6 +131,7 @@ def main():
     
     # Load environment variables
     load_dotenv()
+    load_dotenv("LLM-APIKey.env", override=False)
     
     # Print welcome
     print_welcome()
@@ -160,8 +161,15 @@ def main():
     # Main chat loop
     while True:
         try:
-            # Get user input with history support
-            user_input = session.prompt("\n[You] > ")
+            # Get user input with history support (fallback to basic prompt if event loop already running)
+            try:
+                user_input = session.prompt("\n[You] > ")
+            except RuntimeError as prompt_err:
+                if "asyncio.run()" in str(prompt_err):
+                    console.print("[yellow]⚠️ Prompt toolkit couldn't acquire the event loop; falling back to basic input.[/yellow]")
+                    user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+                else:
+                    raise
             
             if not user_input.strip():
                 continue
