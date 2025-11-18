@@ -1044,6 +1044,8 @@ class JiraIntegration:
                 start_at = 0
                 page_size = 100  # Jira API max per request
                 total_fetched = 0
+                log_interval = max(int(os.getenv("JIRA_PAGINATION_LOG_INTERVAL", "500")), 100)
+                next_log_threshold = log_interval
                 
                 MAX_NO_DATE_RESULTS = 5000
                 guard_triggered = False
@@ -1146,7 +1148,9 @@ class JiraIntegration:
                         if max_results > 0 and total_fetched >= max_results:
                             break
                     
-                    console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
+                    if total_fetched >= next_log_threshold:
+                        console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
+                        next_log_threshold += log_interval
                     
                     # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
                     # and Jira is clearly ignoring filters, stop and rely on post-filter
@@ -1188,6 +1192,8 @@ class JiraIntegration:
                     
                     start_at += current_page_size
                 
+                console.print(f"[dim]   Total tickets fetched before filtering: {total_fetched}[/dim]")
+
                 if (
                     _allow_date_slicing
                     and safety_enabled
