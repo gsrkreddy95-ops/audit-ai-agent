@@ -25,6 +25,9 @@ DEFAULT_JIRA_EVIDENCE_FOLDER = os.getenv('DEFAULT_JIRA_EVIDENCE_FOLDER', 'JIRA-E
 
 
 class JiraIntegration:
+    DEFAULT_BOARD_MAP = {
+        "XDR": os.getenv("JIRA_DEFAULT_BOARD_XDR", "All work"),
+    }
     def _get_export_directory(self, rfi_code: Optional[str]) -> Path:
         """Return target directory under audit-evidence for Jira exports."""
         folder = (rfi_code or DEFAULT_JIRA_EVIDENCE_FOLDER).strip() or DEFAULT_JIRA_EVIDENCE_FOLDER
@@ -313,13 +316,24 @@ class JiraIntegration:
             clauses.append(f'text ~ "{safe_text}"')
         base = " AND ".join(clauses) if clauses else ""
         # Merge board filter if provided
-        if board_name:
-            filter_jql = self._get_board_filter_jql(board_name, self._extract_project_key_from_jql(base))
+        effective_board = board_name or self._derive_default_board_for_jql(base)
+        if effective_board:
+            filter_jql = self._get_board_filter_jql(effective_board, self._extract_project_key_from_jql(base))
             if filter_jql:
                 base = f"({filter_jql}) AND ({base})" if base else filter_jql
         if order_by:
             return f"{base} ORDER BY {order_by}"
         return base
+
+    def _derive_default_board_for_jql(self, jql_query: str) -> Optional[str]:
+        """Return project-specific default board name if configured."""
+        project_key = self._extract_project_key_from_jql(jql_query or "")
+        if not project_key:
+            return None
+        board_name = self.DEFAULT_BOARD_MAP.get(project_key.upper())
+        if board_name:
+            console.print(f"[dim]   Applying default board '{board_name}' for project {project_key}[/dim]")
+        return board_name
 
     @staticmethod
     def _get_created_range(created_rules: Optional[Dict[str, datetime]]) -> Optional[Tuple[datetime, datetime]]:
@@ -1213,7 +1227,8 @@ class JiraIntegration:
             return []
         
         try:
-            jql_query = self._augment_jql_with_board_filter(jql_query, board_name)
+            effective_board = board_name or self._derive_default_board_for_jql(jql_query)
+            jql_query = self._augment_jql_with_board_filter(jql_query, effective_board)
             condition_jql, order_clause = self._split_condition_and_order(jql_query)
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
