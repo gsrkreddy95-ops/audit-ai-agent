@@ -14,6 +14,7 @@ from .llm_config import LLMFactory
 from .tools_definition import get_tool_definitions
 from .tool_executor import ToolExecutor
 from .conversation_history import ConversationHistory
+from .advisor_llm import AdvisorLLM
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from evidence_manager.local_evidence_manager import LocalEvidenceManager
@@ -56,10 +57,25 @@ class IntelligentAgent:
         # Initialize persistent conversation history
         max_history = int(os.getenv('CHAT_HISTORY_MAX_EXCHANGES', '20'))
         self.persistent_history = ConversationHistory(max_exchanges=max_history)
+        self.advisor = None
         
         console.print(f"[green]✅ Ready![/green]")
         console.print(f"[dim]Evidence: {self.evidence_manager.evidence_dir}[/dim]")
         console.print(f"[dim]Tools: {len(self.tools)} available[/dim]\n")
+        
+        # Initialize Advisor LLM if available
+        advisor_key = os.getenv("ADVISOR_API_KEY")
+        if advisor_key:
+            advisor_provider = os.getenv("ADVISOR_LLM_PROVIDER", "openai")
+            advisor_model = os.getenv("ADVISOR_LLM_MODEL", "gpt-4.1-mini")
+            advisor_base = os.getenv("ADVISOR_API_BASE")
+            self.advisor = AdvisorLLM(
+                api_key=advisor_key,
+                provider=advisor_provider,
+                model=advisor_model,
+                api_base=advisor_base,
+            )
+            self.tool_executor.set_advisor(self.advisor)
     
     def chat(self, user_input: str) -> str:
         """

@@ -60,6 +60,7 @@ class ToolExecutor:
         self.meta_intelligence = None
         self.multi_dim_coordinator = None
         self.current_request: Optional[str] = None
+        self.advisor = None
         # Reusable AWS browser session (UniversalScreenshotEnhanced) for non-RDS services
         self._aws_universal_session = None
         self._aws_session_account = None
@@ -123,6 +124,10 @@ class ToolExecutor:
         """Track the latest user request for meta-intelligence context."""
         self.current_request = request
     
+    def set_advisor(self, advisor) -> None:
+        """Attach advisor LLM for failure analysis."""
+        self.advisor = advisor
+    
     def execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         """
         Public entry point for tool execution. When Meta-Intelligence is active,
@@ -130,13 +135,18 @@ class ToolExecutor:
         gap detection, retries, and self-healing orchestration.
         """
         if self.meta_intelligence and self.current_request:
-            return self.meta_intelligence.execute_with_meta_intelligence(
+            result = self.meta_intelligence.execute_with_meta_intelligence(
                 user_request=self.current_request,
                 tool_name=tool_name,
                 tool_params=tool_input,
                 execute_callback=self._execute_tool_direct
             )
-        return self._execute_tool_direct(tool_name, tool_input)
+        else:
+            result = self._execute_tool_direct(tool_name, tool_input)
+
+        if isinstance(result, dict):
+            self._notify_advisor_of_step(tool_name, tool_input, result)
+        return result
     
     def _execute_tool_direct(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -2909,4 +2919,42 @@ class ToolExecutor:
             f"[dim]   Ignoring implicit max_results={raw_max} (user did not request a limit).[/dim]"
         )
         return 0
+
+    def _notify_advisor_of_step(
+        self,
+        tool_name: str,
+        tool_params: Dict[str, Any],
+        result_payload: Dict[str, Any],
+    ) -> None:
+        """Forward failure context to advisor LLM for diagnosis."""
+        if not self.advisor:
+            return
+        try:
+            log_excerpt = (
+                result_payload.get("error")
+                or result_payload.get("message")
+                or result_payload.get("log")
+            )
+            if result_payload.get("status") == "success":
+                advice = self.advisor.review_step(
+                    current_request=self.current_request or "",
+                    tool_name=tool_name,
+                    tool_params=tool_params,
+                    result_payload=result_payload,
+                    log_excerpt=log_excerpt,
+                )
+            else:
+                advice = self.advisor.analyze_failure(
+                    current_request=self.current_request or "",
+                    tool_name=tool_name,
+                    tool_params=tool_params,
+                    result_payload=result_payload,
+                    log_excerpt=log_excerpt,
+                )
+            if not advice:
+                return
+            console.print("[yellow]\n🧠 Advisor feedback[/yellow]")
+            console.print_json(data=advice)
+        except Exception as exc:
+            console.print(f"[yellow]⚠️ Advisor notification failed: {exc}[/yellow]")
 
