@@ -165,6 +165,50 @@ Provide services like ["rds","s3","kms"] and regions ["us-east-1","eu-west-1"]. 
                 "required": ["services", "aws_regions", "aws_account"]
             }
         },
+        {
+            "name": "myid_export_access",
+            "description": """Export access provisioning records from MyID (or compatible access management API).
+
+Use this to retrieve who was granted access to specific environments (non-prod, prod, GitHub, etc.) over a date window.
+Results are automatically saved under ~/Documents/audit-evidence/<FY>/<folder>. Provide rfi_code to organize under a specific RFI.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "environment": {
+                        "type": "string",
+                        "description": "Environment filter (e.g., 'non-prod', 'prod', 'github')."
+                    },
+                    "groups": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "MyID group names to include."
+                    },
+                    "start_date": {
+                        "type": "string",
+                        "description": "Start date for provisioning window (YYYY-MM-DD)."
+                    },
+                    "end_date": {
+                        "type": "string",
+                        "description": "End date for provisioning window (YYYY-MM-DD)."
+                    },
+                    "include_fields": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Additional MyID fields to include in the export."
+                    },
+                    "output_format": {
+                        "type": "string",
+                        "enum": ["csv", "json"],
+                        "description": "Export format (default csv)."
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Evidence folder under audit-evidence (default: MYID-EXPORTS)."
+                    }
+                },
+                "required": []
+            }
+        },
 
         {
             "name": "analyze_document_evidence",
@@ -1145,6 +1189,39 @@ The agent will:
                 "required": []
             }
         },
+        {
+            "name": "jira_dashboard_summary",
+            "description": """Summarize a Jira board filter (status, assignee, label counts) and optionally export the tickets.
+
+Use this to mirror Jira dashboards programmatically. Provide the board name (e.g., 'XDR SRE Sprint').""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "board_name": {
+                        "type": "string",
+                        "description": "Jira board/dashboard name.",
+                    },
+                    "project_key": {
+                        "type": "string",
+                        "description": "Optional project key hint to resolve the board faster."
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum tickets to fetch for the summary (default 500)."
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports all dashboard tickets to this format."
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Evidence folder name (default: JIRA-EXPORTS)."
+                    }
+                },
+                "required": ["board_name"]
+            }
+        },
         
         {
             "name": "jira_get_ticket",
@@ -1323,6 +1400,56 @@ The agent will:
                         "type": "string",
                         "enum": ["json", "csv"],
                         "description": "If provided, exports results to this format"
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Evidence folder for exports (default: GITHUB-EXPORTS)."
+                    }
+                },
+                "required": ["repo_name"]
+            }
+        },
+        {
+            "name": "github_list_discussions",
+            "description": """List GitHub Discussions in a repository with optional filters (state, creator, category, label).
+
+Useful for general collaboration/audit reviews. Results can be exported to CSV/JSON under the audit-evidence tree.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "Repository full name (e.g., 'org/repo')."
+                    },
+                    "state": {
+                        "type": "string",
+                        "enum": ["open", "closed", "all"],
+                        "description": "Discussion state filter (default open)."
+                    },
+                    "creator": {
+                        "type": "string",
+                        "description": "Filter by creator username."
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Filter by discussion category."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Filter by label."
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of discussions (default 50)."
+                    },
+                    "export_format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "If provided, exports results to this format."
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Evidence folder for exports (default: GITHUB-EXPORTS)."
                     }
                 },
                 "required": ["repo_name"]
@@ -1437,6 +1564,10 @@ The agent will:
                         "type": "string",
                         "enum": ["json", "csv"],
                         "description": "If provided, exports results to this format"
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Evidence folder for exports (default: GITHUB-EXPORTS)."
                     }
                 },
                 "required": ["repo_name"]

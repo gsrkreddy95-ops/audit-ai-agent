@@ -159,6 +159,58 @@ class JiraIntegration:
             day_results.extend(day_tickets)
         return day_results
 
+    def dashboard_summary(
+        self,
+        board_name: str,
+        project_key: Optional[str] = None,
+        max_results: int = 500
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        Build a dashboard-style summary for a Jira board or filter.
+        """
+        filter_jql = self._get_board_filter_jql(board_name, project_key)
+        if not filter_jql:
+            return (
+                {
+                    "board_name": board_name,
+                    "error": f"Board '{board_name}' not found or has no filter."
+                },
+                []
+            )
+
+        console.print(f"[cyan]📊 Gathering dashboard summary for '{board_name}'[/cyan]")
+        tickets = self.search_jql(
+            jql_query=filter_jql,
+            max_results=max_results,
+            paginate=True,
+            board_name=None
+        )
+
+        status_counts: Dict[str, int] = {}
+        assignee_counts: Dict[str, int] = {}
+        label_counts: Dict[str, int] = {}
+
+        for ticket in tickets:
+            status = ticket.get("status", "Unknown")
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            assignee = ticket.get("assignee") or "Unassigned"
+            assignee_counts[assignee] = assignee_counts.get(assignee, 0) + 1
+
+            for label in ticket.get("labels") or []:
+                label_counts[label] = label_counts.get(label, 0) + 1
+
+        summary = {
+            "board_name": board_name,
+            "project_key": project_key,
+            "filter_jql": filter_jql,
+            "ticket_count": len(tickets),
+            "status_breakdown": status_counts,
+            "assignee_breakdown": assignee_counts,
+            "label_breakdown": label_counts,
+        }
+        return summary, tickets
+
     # ---------- Intent to JQL builder ----------
     @staticmethod
     def _quote_list(items: Optional[List[str]]) -> Optional[str]:

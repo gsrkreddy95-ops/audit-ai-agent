@@ -212,6 +212,9 @@ class ToolExecutor:
             elif tool_name == "bulk_aws_export":
                 return self._execute_bulk_aws_export(tool_input)
             
+            elif tool_name == "myid_export_access":
+                return self._execute_myid_export_access(tool_input)
+            
             elif tool_name == "get_browser_screenshot":
                 return self._execute_browser_screenshot(tool_input)
             
@@ -262,6 +265,9 @@ class ToolExecutor:
             elif tool_name == "jira_search_intent":
                 return self._execute_jira_search_intent(tool_input)
             
+            elif tool_name == "jira_dashboard_summary":
+                return self._execute_jira_dashboard_summary(tool_input)
+            
             elif tool_name == "jira_get_ticket":
                 return self._execute_jira_get_ticket(tool_input)
             
@@ -287,6 +293,9 @@ class ToolExecutor:
             
             elif tool_name == "github_list_issues":
                 return self._execute_github_list_issues(tool_input)
+            
+            elif tool_name == "github_list_discussions":
+                return self._execute_github_list_discussions(tool_input)
             
             else:
                 return {
@@ -1879,6 +1888,31 @@ class ToolExecutor:
             "result": summary if overall_status == "success" else summary,
             "message": f"Completed {len(summary['successes'])} services with {len(summary['failures'])} failures"
         }
+
+    def _execute_myid_export_access(self, params: Dict) -> Dict:
+        """Export MyID access provisioning records."""
+        try:
+            from integrations import MyIDExporter
+
+            exporter = MyIDExporter()
+            if not exporter.is_configured:
+                return {"status": "error", "error": "MYID_API_TOKEN not configured. Set it in your .env file."}
+
+            result = exporter.export_access_records(
+                environment=params.get("environment"),
+                groups=params.get("groups"),
+                start_date=params.get("start_date"),
+                end_date=params.get("end_date"),
+                include_fields=params.get("include_fields"),
+                output_format=params.get("output_format", "csv"),
+                rfi_code=params.get("rfi_code")
+            )
+            if not result.get("success"):
+                return {"status": "error", "error": result.get("error", "MyID export failed")}
+            return {"status": "success", "result": result}
+        except Exception as e:
+            console.print(f"[red]❌ MyID export failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
     
     def _execute_browser_screenshot(self, params: Dict) -> Dict:
         """Execute get_browser_screenshot - Capture browser state for debugging"""
@@ -2432,6 +2466,49 @@ class ToolExecutor:
         except Exception as e:
             console.print(f"[red]❌ Jira intent search failed: {e}[/red]")
             return {"status": "error", "error": str(e)}
+
+    def _execute_jira_dashboard_summary(self, params: Dict) -> Dict:
+        """Build a Jira dashboard summary for a board/filter."""
+        try:
+            from integrations import JiraIntegration
+
+            jira = JiraIntegration()
+            if not jira.jira:
+                return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+
+            summary, tickets = jira.dashboard_summary(
+                board_name=params.get("board_name"),
+                project_key=params.get("project_key"),
+                max_results=params.get("max_results", 500)
+            )
+            if summary.get("error"):
+                return {"status": "error", "error": summary["error"]}
+
+            export_format = params.get("export_format")
+            export_path = ""
+            if export_format and tickets:
+                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=params.get("rfi_code"))
+
+            MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 200)
+            truncated = False
+            tickets_for_response = tickets
+            if MAX_TICKETS_FOR_RESPONSE and len(tickets) > MAX_TICKETS_FOR_RESPONSE:
+                tickets_for_response = tickets[:MAX_TICKETS_FOR_RESPONSE]
+                truncated = True
+
+            return {
+                "status": "success",
+                "result": {
+                    "summary": summary,
+                    "tickets": tickets_for_response,
+                    "total_tickets": len(tickets),
+                    "truncated": truncated,
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ Jira dashboard summary failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
     
     def _summarize_jira_tickets(self, tickets: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Build quick analytics so LLM responses include richer context"""
@@ -2584,7 +2661,7 @@ class ToolExecutor:
             export_format = params.get('export_format')
             export_path = ""
             if export_format and prs:
-                export_path = github.export_data(prs, output_format=export_format)
+                export_path = github.export_data(prs, output_format=export_format, rfi_code=params.get('rfi_code'))
             
             return {
                 "status": "success",
@@ -2671,7 +2748,7 @@ class ToolExecutor:
             export_format = params.get('export_format')
             export_path = ""
             if export_format and issues:
-                export_path = github.export_data(issues, output_format=export_format)
+                export_path = github.export_data(issues, output_format=export_format, rfi_code=params.get('rfi_code'))
             
             return {
                 "status": "success",
@@ -2683,6 +2760,41 @@ class ToolExecutor:
             }
         except Exception as e:
             console.print(f"[red]❌ GitHub list issues failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+
+    def _execute_github_list_discussions(self, params: Dict) -> Dict:
+        """Execute GitHub list discussions"""
+        try:
+            from integrations import GitHubIntegration
+
+            github = GitHubIntegration()
+            if not github.github:
+                return {"status": "error", "error": "GitHub not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
+
+            discussions = github.list_discussions(
+                repo_name=params.get("repo_name"),
+                state=params.get("state", "open"),
+                creator=params.get("creator"),
+                category=params.get("category"),
+                label=params.get("label"),
+                limit=params.get("limit", 50)
+            )
+
+            export_format = params.get("export_format")
+            export_path = ""
+            if export_format and discussions:
+                export_path = github.export_data(discussions, output_format=export_format, rfi_code=params.get("rfi_code"))
+
+            return {
+                "status": "success",
+                "result": {
+                    "discussions": discussions,
+                    "count": len(discussions),
+                    "export_path": export_path
+                }
+            }
+        except Exception as e:
+            console.print(f"[red]❌ GitHub list discussions failed: {e}[/red]")
             return {"status": "error", "error": str(e)}
     
     def cleanup(self):

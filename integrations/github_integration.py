@@ -16,9 +16,12 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pathlib import Path
 
+import requests
 from rich.console import Console
+from evidence_manager.evidence_path_utils import ensure_evidence_subdir
 
 console = Console()
+DEFAULT_GITHUB_EVIDENCE_FOLDER = os.getenv("DEFAULT_GITHUB_EVIDENCE_FOLDER", "GITHUB-EXPORTS")
 
 
 class GitHubIntegration:
@@ -71,6 +74,12 @@ class GitHubIntegration:
             console.print("[red]❌ GitHub not connected! Please check token.[/red]")
             return False
         return True
+
+    def _rest_headers(self) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.token}",
+            "Accept": "application/vnd.github+json"
+        }
     
     def list_repositories(self, org: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -379,12 +388,93 @@ class GitHubIntegration:
         except Exception as e:
             console.print(f"[red]❌ Error listing issues: {e}[/red]")
             return []
+
+    def list_discussions(
+        self,
+        repo_name: str,
+        state: str = 'open',
+        creator: Optional[str] = None,
+        category: Optional[str] = None,
+        label: Optional[str] = None,
+        limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        List GitHub Discussions using the REST preview endpoint.
+        """
+        if not self._check_connection():
+            return []
+
+        try:
+            owner, repo = repo_name.split('/', 1)
+            per_page = min(limit, 100)
+            page = 1
+            discussions: List[Dict[str, Any]] = []
+
+            console.print(f"[cyan]💬 Listing discussions in {repo_name} (state={state})[/cyan]")
+
+            while len(discussions) < limit:
+                params = {
+                    "per_page": per_page,
+                    "page": page
+                }
+                url = f"https://api.github.com/repos/{owner}/{repo}/discussions"
+                response = requests.get(url, headers=self._rest_headers(), params=params, timeout=30)
+                if response.status_code != 200:
+                    console.print(f"[red]❌ GitHub discussions API error: {response.status_code} {response.text}[/red]")
+                    break
+
+                page_items = response.json()
+                if not isinstance(page_items, list):
+                    console.print("[yellow]⚠️  Unexpected discussion response format[/yellow]")
+                    break
+
+                for disc in page_items:
+                    if len(discussions) >= limit:
+                        break
+
+                    if state.lower() != 'all' and disc.get("state", "").lower() != state.lower():
+                        continue
+                    if creator and (disc.get("user", {}).get("login") != creator):
+                        continue
+                    if category and (disc.get("category", {}).get("name") != category):
+                        continue
+                    if label:
+                        labels = [lbl.get("name") for lbl in disc.get("labels", []) if lbl.get("name")]
+                        if label not in labels:
+                            continue
+
+                    discussions.append({
+                        "id": disc.get("id"),
+                        "number": disc.get("number"),
+                        "title": disc.get("title"),
+                        "author": disc.get("user", {}).get("login"),
+                        "state": disc.get("state"),
+                        "category": disc.get("category", {}).get("name"),
+                        "comments": disc.get("comments"),
+                        "created": disc.get("created_at"),
+                        "updated": disc.get("updated_at"),
+                        "labels": [lbl.get("name") for lbl in disc.get("labels", []) if lbl.get("name")],
+                        "url": disc.get("html_url"),
+                        "body": disc.get("body")
+                    })
+
+                if len(page_items) < per_page:
+                    break
+                page += 1
+
+            console.print(f"[green]✅ Found {len(discussions)} discussions[/green]")
+            return discussions
+
+        except Exception as e:
+            console.print(f"[red]❌ Error listing discussions: {e}[/red]")
+            return []
     
     def export_data(
         self,
         data: List[Dict[str, Any]],
         output_format: str = 'json',
-        output_file: Optional[str] = None
+        output_file: Optional[str] = None,
+        rfi_code: Optional[str] = None
     ) -> str:
         """
         Export data to JSON or CSV
@@ -403,11 +493,15 @@ class GitHubIntegration:
         
         try:
             # Generate output filename if not provided
-            if not output_file:
+            target_dir = ensure_evidence_subdir(rfi_code or DEFAULT_GITHUB_EVIDENCE_FOLDER)
+            if output_file:
+                output_path = Path(output_file)
+                if not output_path.is_absolute():
+                    output_path = target_dir / output_path
+            else:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_file = f"github_data_{timestamp}.{output_format}"
+                output_path = target_dir / f"github_data_{timestamp}.{output_format}"
             
-            output_path = Path(output_file)
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
             if output_format == 'json':
