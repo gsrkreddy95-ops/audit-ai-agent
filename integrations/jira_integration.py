@@ -18,11 +18,17 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from rich.console import Console
+from evidence_manager.evidence_path_utils import ensure_evidence_subdir
 
 console = Console()
+DEFAULT_JIRA_EVIDENCE_FOLDER = os.getenv('DEFAULT_JIRA_EVIDENCE_FOLDER', 'JIRA-EXPORTS')
 
 
 class JiraIntegration:
+    def _get_export_directory(self, rfi_code: Optional[str]) -> Path:
+        """Return target directory under audit-evidence for Jira exports."""
+        folder = (rfi_code or DEFAULT_JIRA_EVIDENCE_FOLDER).strip() or DEFAULT_JIRA_EVIDENCE_FOLDER
+        return ensure_evidence_subdir(folder)
     def _request_jira_search_page(
         self,
         jql_query: str,
@@ -1306,7 +1312,8 @@ class JiraIntegration:
         self,
         tickets: List[Dict[str, Any]],
         output_format: str = 'csv',
-        output_file: Optional[str] = None
+        output_file: Optional[str] = None,
+        rfi_code: Optional[str] = None
     ) -> str:
         """
         Export tickets to CSV or JSON
@@ -1324,21 +1331,18 @@ class JiraIntegration:
             return ""
         
         try:
-            # Determine base evidence directory
-            evidence_base = os.getenv('LOCAL_EVIDENCE_PATH')
-            if not evidence_base:
-                evidence_base = str(Path.home() / "Documents" / "audit-evidence")
-            current_year = os.getenv('SHAREPOINT_CURRENT_YEAR', 'FY2025')
-            jira_dir = Path(evidence_base) / current_year / "JIRA_EXPORTS"
+            export_dir = self._get_export_directory(rfi_code)
             
             # Generate output filename if not provided
-            if not output_file:
+            if output_file:
+                output_path = Path(output_file)
+                if not output_path.is_absolute():
+                    output_path = export_dir / output_path
+            else:
                 timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                output_file = f"jira_tickets_{timestamp}.{output_format}"
+                filename = f"jira_tickets_{timestamp}.{output_format}"
+                output_path = export_dir / filename
             
-            output_path = Path(output_file)
-            if not output_path.is_absolute():
-                output_path = jira_dir / output_path
             output_path.parent.mkdir(parents=True, exist_ok=True)
             
             if output_format == 'csv':

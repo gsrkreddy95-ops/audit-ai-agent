@@ -1008,6 +1008,10 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                         "type": "string",
                         "enum": ["json", "csv"],
                         "description": "If provided, exports results to this format"
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Optional evidence folder (defaults to JIRA-EXPORTS under audit-evidence)."
                     }
                 },
                 "required": []
@@ -1055,6 +1059,10 @@ CRITICAL: Always use this BEFORE collecting new evidence so you match the expect
                         "type": "string",
                         "enum": ["json", "csv"],
                         "description": "If provided, exports results to this format"
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Optional evidence folder name under audit-evidence (default: JIRA-EXPORTS)."
                     }
                 },
                 "required": ["jql_query"]
@@ -1128,6 +1136,10 @@ The agent will:
                         "type": "string",
                         "enum": ["json", "csv"],
                         "description": "If provided, exports full results to this format"
+                    },
+                    "rfi_code": {
+                        "type": "string",
+                        "description": "Optional evidence folder name (default: JIRA-EXPORTS)"
                     }
                 },
                 "required": []

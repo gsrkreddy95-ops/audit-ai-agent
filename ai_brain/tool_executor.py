@@ -2247,6 +2247,7 @@ class ToolExecutor:
             if not jira.jira:
                 return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
             
+            rfi_code = params.get('rfi_code')
             tickets = jira.list_tickets(
                 project=params.get('project'),
                 labels=params.get('labels'),
@@ -2262,7 +2263,7 @@ class ToolExecutor:
             export_format = params.get('export_format')
             export_path = ""
             if export_format and tickets:
-                export_path = jira.export_tickets(tickets, output_format=export_format)
+                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=rfi_code)
             
             return {
                 "status": "success",
@@ -2285,6 +2286,7 @@ class ToolExecutor:
             if not jira.jira:
                 return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
             
+            rfi_code = params.get('rfi_code')
             tickets = jira.search_jql(
                 jql_query=params.get('jql_query'),
                 max_results=params.get('max_results', 0),  # Default to 0 = fetch ALL matching tickets
@@ -2309,7 +2311,7 @@ class ToolExecutor:
             export_format = params.get('export_format')
             export_path = ""
             if export_format and tickets:
-                export_path = jira.export_tickets(tickets, output_format=export_format)
+                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=rfi_code)
             
             return {
                 "status": "success",
@@ -2357,6 +2359,7 @@ class ToolExecutor:
             if not jira.jira:
                 return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
             
+            rfi_code = params.get('rfi_code')
             project = params.get('project') or "XDR"
             labels = params.get('labels') or []
             if isinstance(labels, str):
@@ -2400,7 +2403,7 @@ class ToolExecutor:
             export_format = params.get('export_format')
             export_path = ""
             if export_format and tickets:
-                export_path = jira.export_tickets(tickets, output_format=export_format)
+                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=rfi_code)
             
             # For LLM safety, reuse jira_search_jql truncation rules
             MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 300)
