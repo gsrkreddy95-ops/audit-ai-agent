@@ -25,8 +25,11 @@ DEFAULT_JIRA_EVIDENCE_FOLDER = os.getenv('DEFAULT_JIRA_EVIDENCE_FOLDER', 'JIRA-E
 
 
 class JiraIntegration:
-    DEFAULT_BOARD_MAP = {
-        "XDR": os.getenv("JIRA_DEFAULT_BOARD_XDR", "All work"),
+    DEFAULT_SCOPE_MAP = {
+        "XDR": {
+            "board": os.getenv("JIRA_DEFAULT_BOARD_XDR", ""),
+            "filter": os.getenv("JIRA_DEFAULT_FILTER_XDR", "All work"),
+        }
     }
     def _get_export_directory(self, rfi_code: Optional[str]) -> Path:
         """Return target directory under audit-evidence for Jira exports."""
@@ -316,24 +319,44 @@ class JiraIntegration:
             clauses.append(f'text ~ "{safe_text}"')
         base = " AND ".join(clauses) if clauses else ""
         # Merge board filter if provided
-        effective_board = board_name or self._derive_default_board_for_jql(base)
+        effective_board = board_name
+        effective_filter = None
+        if not effective_board:
+            effective_board, effective_filter = self._derive_default_scope_for_jql(base)
         if effective_board:
             filter_jql = self._get_board_filter_jql(effective_board, self._extract_project_key_from_jql(base))
             if filter_jql:
                 base = f"({filter_jql}) AND ({base})" if base else filter_jql
+                effective_filter = None  # board already applied
+        if effective_filter:
+            base, _ = self._apply_saved_filter_to_jql(base, effective_filter)
         if order_by:
             return f"{base} ORDER BY {order_by}"
         return base
 
-    def _derive_default_board_for_jql(self, jql_query: str) -> Optional[str]:
-        """Return project-specific default board name if configured."""
+    def _derive_default_scope_for_jql(self, jql_query: str) -> Tuple[Optional[str], Optional[str]]:
+        """Return project-specific default board/filter names if configured."""
         project_key = self._extract_project_key_from_jql(jql_query or "")
         if not project_key:
-            return None
-        board_name = self.DEFAULT_BOARD_MAP.get(project_key.upper())
+            return None, None
+        scope = self.DEFAULT_SCOPE_MAP.get(project_key.upper(), {})
+        board_name = (scope.get("board") or "").strip() or None
+        filter_name = (scope.get("filter") or "").strip() or None
         if board_name:
             console.print(f"[dim]   Applying default board '{board_name}' for project {project_key}[/dim]")
-        return board_name
+        elif filter_name:
+            console.print(f"[dim]   Applying default filter '{filter_name}' for project {project_key}[/dim]")
+        return board_name, filter_name
+
+    def _apply_saved_filter_to_jql(self, base_jql: str, filter_name: Optional[str]) -> Tuple[str, bool]:
+        """Combine base JQL with a saved filter if available."""
+        if not filter_name:
+            return base_jql, False
+        filter_jql = self._get_saved_filter_jql(filter_name)
+        if not filter_jql:
+            return base_jql, False
+        combined = f"({filter_jql}) AND ({base_jql})" if base_jql else filter_jql
+        return combined, True
 
     @staticmethod
     def _get_created_range(created_rules: Optional[Dict[str, datetime]]) -> Optional[Tuple[datetime, datetime]]:
@@ -1115,6 +1138,41 @@ class JiraIntegration:
         except Exception as e:
             console.print(f"[yellow]⚠️  Failed to resolve board '{board_name}': {e}[/yellow]")
             return None
+
+    def _get_saved_filter_jql(self, filter_name: str) -> Optional[str]:
+        """Fetch saved filter JQL by user-visible name (case-insensitive)."""
+        if not filter_name:
+            return None
+        try:
+            server = self.jira._options['server']
+            params = {
+                "filterName": filter_name,
+                "expand": "jql",
+                "maxResults": 50,
+                "startAt": 0
+            }
+            normalized = filter_name.strip().lower()
+            while True:
+                response = self.jira._session.get(
+                    f"{server}/rest/api/3/filter/search",
+                    params=params
+                )
+                response.raise_for_status()
+                data = response.json()
+                for flt in data.get("values", []):
+                    if flt.get("name", "").strip().lower() == normalized:
+                        jql = flt.get("jql")
+                        if jql:
+                            console.print(f"[dim]   Applying saved filter '{filter_name}'[/dim]")
+                            return jql
+                if data.get("isLast", True):
+                    break
+                params["startAt"] += params["maxResults"]
+            console.print(f"[yellow]⚠️  Saved filter '{filter_name}' not found.[/yellow]")
+            return None
+        except Exception as exc:
+            console.print(f"[yellow]⚠️  Failed to resolve filter '{filter_name}': {exc}[/yellow]")
+            return None
     
     def list_tickets(
         self,
@@ -1227,8 +1285,15 @@ class JiraIntegration:
             return []
         
         try:
-            effective_board = board_name or self._derive_default_board_for_jql(jql_query)
+            effective_board = board_name
+            effective_filter = None
+            if not effective_board:
+                effective_board, effective_filter = self._derive_default_scope_for_jql(jql_query)
             jql_query = self._augment_jql_with_board_filter(jql_query, effective_board)
+            if effective_filter:
+                jql_query, filter_applied = self._apply_saved_filter_to_jql(jql_query, effective_filter)
+                if filter_applied:
+                    jql_query = self._normalize_jql_dates(jql_query)
             condition_jql, order_clause = self._split_condition_and_order(jql_query)
             console.print(f"[cyan]🔍 Executing JQL: {jql_query}[/cyan]")
             
