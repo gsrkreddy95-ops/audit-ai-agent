@@ -101,3 +101,5 @@ htmlcov/
 # Session data
 session_data/
 cookies/
+.chat_history
+conversation_history.json

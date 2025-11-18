@@ -2321,9 +2321,13 @@ class ToolExecutor:
                 return {"status": "error", "error": "Jira not connected. Please check INTEGRATION_SETUP_GUIDE.md"}
             
             rfi_code = params.get('rfi_code')
+            max_results = self._determine_effective_max_results(
+                params.get('max_results'),
+                self.current_request
+            )
             tickets = jira.search_jql(
                 jql_query=params.get('jql_query'),
-                max_results=params.get('max_results', 0),  # Default to 0 = fetch ALL matching tickets
+                max_results=max_results,
                 paginate=params.get('paginate', True),  # Enable pagination by default
                 board_name=params.get('board_name'),
                 space=params.get('space'),
@@ -2441,9 +2445,13 @@ class ToolExecutor:
             
             console.print(f"[cyan]🧠 Intent → JQL: {jql}[/cyan]")
             
+            max_results = self._determine_effective_max_results(
+                params.get('max_results'),
+                self.current_request
+            )
             tickets = jira.search_jql(
                 jql_query=jql,
-                max_results=params.get('max_results', 0),
+                max_results=max_results,
                 paginate=params.get('paginate', True),
                 board_name=None,  # already merged via builder if provided
                 space=params.get('space'),
@@ -2882,4 +2890,23 @@ class ToolExecutor:
         
         # Close persistent browser session
         BrowserSessionManager.close_browser()
+
+    @staticmethod
+    def _determine_effective_max_results(raw_max: Optional[int], user_request: Optional[str]) -> int:
+        """
+        Determine whether to honor a max_results value.
+        We ignore implicit defaults (e.g., 100) unless the user explicitly asked for a limit.
+        """
+        if not raw_max or raw_max <= 0:
+            return 0
+        
+        request_text = (user_request or "").lower()
+        keywords = ["max", "limit", "first", "top", "recent", "latest", "last", "only", "first"]
+        if any(keyword in request_text for keyword in keywords):
+            return raw_max
+        
+        console.print(
+            f"[dim]   Ignoring implicit max_results={raw_max} (user did not request a limit).[/dim]"
+        )
+        return 0
 
