@@ -1488,13 +1488,6 @@ class JiraIntegration:
                         console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
                         next_log_threshold += log_interval
                     
-                    if new_issues_added == 0:
-                        console.print(
-                            "[yellow]⚠️  Jira returned a duplicate page (pagination ignored). "
-                            "Stopping further fetches to avoid infinite loop.[/yellow]"
-                        )
-                        break
-                    
                     # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
                     # and Jira is clearly ignoring filters, stop and rely on post-filter
                     if total_available and total_available > 0 and total_fetched > (total_available * 3):
