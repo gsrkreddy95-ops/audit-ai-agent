@@ -266,9 +266,45 @@ class JiraIntegration:
             except ValueError:
                 clauses.append(f"created <= '{created_end}'")
         if statuses:
-            quoted = self._quote_list(statuses)
-            if quoted:
-                clauses.append(f"status in ({quoted})")
+            include_statuses: List[str] = []
+            exclude_statuses: List[str] = []
+            for status in statuses:
+                if not status:
+                    continue
+                raw = status.strip()
+                if not raw:
+                    continue
+                lowered = raw.lower()
+                negated = False
+                cleaned = raw
+                
+                if lowered.startswith("not "):
+                    negated = True
+                    cleaned = raw[4:]
+                elif raw.startswith("!"):
+                    negated = True
+                    cleaned = raw[1:]
+                elif lowered.startswith("!="):
+                    negated = True
+                    cleaned = raw[2:]
+                
+                cleaned = cleaned.strip().strip('"\'')
+                if not cleaned:
+                    continue
+                
+                if negated:
+                    exclude_statuses.append(cleaned)
+                else:
+                    include_statuses.append(cleaned)
+            
+            if include_statuses:
+                quoted_in = self._quote_list(include_statuses)
+                if quoted_in:
+                    clauses.append(f"status in ({quoted_in})")
+            if exclude_statuses:
+                quoted_out = self._quote_list(exclude_statuses)
+                if quoted_out:
+                    clauses.append(f"status not in ({quoted_out})")
         if assignee:
             clauses.append(f'assignee = "{assignee}"')
         if text_contains:
