@@ -2347,15 +2347,28 @@ class ToolExecutor:
             if export_format and tickets:
                 export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=rfi_code)
             
+            total_tickets = len(tickets)
+            visible_count = len(tickets_for_response)
+            summary = self._format_jira_summary(
+                total_tickets=total_tickets,
+                visible_count=visible_count,
+                truncated=truncated,
+                analytics=analytics,
+                export_path=export_path,
+                jql=params.get('jql_query')
+            )
+            
             return {
                 "status": "success",
                 "result": {
                     "tickets": tickets_for_response,
-                    "count": len(tickets),
+                    "count": total_tickets,
+                    "visible_count": visible_count,
                     "export_path": export_path,
                     "analytics": analytics,
                     "truncated": truncated,
-                    "total_tickets": len(tickets)
+                    "total_tickets": total_tickets,
+                    "summary": summary
                 }
             }
         except Exception as e:
@@ -2451,16 +2464,29 @@ class ToolExecutor:
                     "for LLM response safety. Include export to receive full dataset.[/yellow]"
                 )
             
+            total_tickets = len(tickets)
+            visible_count = len(tickets_for_response)
+            summary = self._format_jira_summary(
+                total_tickets=total_tickets,
+                visible_count=visible_count,
+                truncated=truncated,
+                analytics=analytics,
+                export_path=export_path,
+                jql=jql
+            )
+            
             return {
                 "status": "success",
                 "result": {
                     "tickets": tickets_for_response,
-                    "count": len(tickets),
+                    "count": total_tickets,
+                    "visible_count": visible_count,
                     "export_path": export_path,
                     "analytics": analytics,
                     "truncated": truncated,
-                    "total_tickets": len(tickets),
-                    "jql": jql
+                    "total_tickets": total_tickets,
+                    "jql": jql,
+                    "summary": summary
                 }
             }
         except Exception as e:
@@ -2541,6 +2567,49 @@ class ToolExecutor:
         }
         
         return analytics
+    
+    def _format_jira_summary(
+        self,
+        total_tickets: int,
+        visible_count: int,
+        truncated: bool,
+        analytics: Dict[str, Any],
+        export_path: str,
+        jql: Optional[str] = None
+    ) -> str:
+        """Create a concise textual summary for Jira responses."""
+        lines = []
+        headline = f"Total tickets: {total_tickets:,}"
+        if truncated:
+            headline += f" (showing {visible_count:,} in chat; see export for full list)"
+        elif total_tickets != visible_count:
+            headline += f" (showing {visible_count:,})"
+        lines.append(headline)
+        
+        status_breakdown = analytics.get("status_breakdown") if analytics else None
+        if status_breakdown:
+            top_status = ", ".join(
+                f"{status}: {count}"
+                for status, count in list(status_breakdown.items())[:5]
+            )
+            if top_status:
+                lines.append(f"Status mix: {top_status}")
+        
+        top_labels = analytics.get("top_labels") if analytics else None
+        if top_labels:
+            label_summary = ", ".join(
+                f"{label}: {count}"
+                for label, count in list(top_labels.items())[:5]
+            )
+            if label_summary:
+                lines.append(f"Top labels: {label_summary}")
+        
+        if export_path:
+            lines.append(f"Full export: {export_path}")
+        if jql:
+            lines.append(f"JQL: {jql}")
+        
+        return " | ".join(lines)
     
     # === CONFLUENCE INTEGRATION IMPLEMENTATIONS ===
     def _execute_confluence_search(self, params: Dict) -> Dict:

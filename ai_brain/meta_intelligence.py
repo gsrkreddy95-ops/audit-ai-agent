@@ -197,8 +197,15 @@ class MetaIntelligence:
             if tickets is None:
                 errors.append("Jira result missing 'tickets' collection")
             count = result.get("count")
-            if tickets is not None and count is not None and count != len(tickets):
-                errors.append(f"Jira result count mismatch (metadata={count}, actual={len(tickets)})")
+            truncated = result.get("truncated")
+            total = result.get("total_tickets")
+            if tickets is not None and count is not None:
+                actual = len(tickets)
+                if truncated and total is not None and count == total:
+                    # acceptable: count reflects total, tickets list is truncated sample
+                    pass
+                elif count != actual:
+                    errors.append(f"Jira result count mismatch (metadata={count}, actual={actual})")
             return errors
         
         return {
