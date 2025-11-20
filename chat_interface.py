@@ -8,6 +8,14 @@ import sys
 import signal
 import atexit
 import asyncio
+import warnings
+
+# Suppress async/coroutine warnings from prompt_toolkit and rich
+# These occur when there are existing event loops from other libraries
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*coroutine.*was never awaited.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*Application.run_async.*")
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*enable tracemalloc.*")
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
