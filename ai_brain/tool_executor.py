@@ -88,9 +88,14 @@ class ToolExecutor:
         self.error_debugger = ErrorDebugger(llm)
         self.enhancement_reviewer = None
         self.parallel_executor = ParallelExecutor(max_workers=3)  # Max 3 parallel browser sessions
-        self.navigation_intelligence = get_navigation_intelligence(llm)
+        self.navigation_intelligence = get_navigation_intelligence(llm)  # Fixed: was initialized twice
         self.execution_intelligence = get_execution_intelligence(llm)
-        self.navigation_intelligence = get_navigation_intelligence(llm)
+        
+        # Initialize shared utilities
+        from ai_brain.shared import ErrorHandler, CacheManager, ConnectionPool
+        self.error_handler = ErrorHandler()
+        self.cache_manager = CacheManager(default_ttl=3600)  # 1 hour default TTL
+        self.connection_pool = ConnectionPool()
         
         self.repo_root = Path(__file__).resolve().parents[1]
         playbook_dir = self.repo_root / "evidence_playbooks"
