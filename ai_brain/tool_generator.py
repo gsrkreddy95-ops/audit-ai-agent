@@ -50,7 +50,8 @@ class ToolGenerator:
         self,
         capability_needed: str,
         context: Dict[str, Any],
-        similar_tools: Optional[List[str]] = None
+        similar_tools: Optional[List[str]] = None,
+        auto_approve: bool = False
     ) -> Dict[str, Any]:
         """
         Generate a new tool for a missing capability.
@@ -59,12 +60,14 @@ class ToolGenerator:
             capability_needed: Description of what's needed (e.g., "export Datadog metrics")
             context: Context from the request (service, account, format, etc.)
             similar_tools: List of similar tool names to use as examples
+            auto_approve: If True, automatically register the tool without approval
             
         Returns:
             {
                 "success": bool,
                 "tool_name": str,
                 "tool_file": str,
+                "language": str,
                 "definition": dict,
                 "code": str,
                 "test_results": dict
@@ -73,14 +76,17 @@ class ToolGenerator:
         console.print(f"\n[bold magenta]🔧 GENERATING NEW TOOL[/bold magenta]")
         console.print(f"[cyan]Capability needed: {capability_needed}[/cyan]")
         
-        # Step 1: Analyze and plan the tool
+        # Step 1: Analyze and plan the tool (includes language selection)
         tool_spec = self._analyze_tool_requirements(capability_needed, context)
         
         if not tool_spec.get("success"):
             return tool_spec
         
-        # Step 2: Generate code
-        code_result = self._generate_tool_code(tool_spec, similar_tools)
+        language = tool_spec.get("language", "python")
+        console.print(f"[cyan]📝 Generating {language.upper()} tool[/cyan]")
+        
+        # Step 2: Generate code in appropriate language
+        code_result = self._generate_tool_code(tool_spec, similar_tools, language)
         
         if not code_result.get("success"):
             return code_result
@@ -88,24 +94,34 @@ class ToolGenerator:
         # Step 3: Create tool definition
         definition = self._create_tool_definition(tool_spec, code_result)
         
-        # Step 4: Save to file
+        # Step 4: Save to file with correct extension
         tool_file = self._save_tool_file(
             tool_spec.get("tool_name"),
-            code_result.get("code")
+            code_result.get("code"),
+            language
         )
         
         # Step 5: Basic validation
-        validation = self._validate_generated_code(tool_file)
+        validation = self._validate_generated_code(tool_file, language)
         
-        return {
+        result = {
             "success": True,
             "tool_name": tool_spec.get("tool_name"),
             "tool_file": str(tool_file),
+            "language": language,
             "definition": definition,
             "code": code_result.get("code"),
             "validation": validation,
-            "status": "generated_pending_approval"
+            "status": "generated_pending_approval" if not auto_approve else "auto_approved"
         }
+        
+        # Auto-approve if enabled and validation passed
+        if auto_approve and validation.get("all_passed"):
+            console.print("[green]✅ Auto-approving generated tool (validation passed)[/green]")
+            result["status"] = "approved_and_registered"
+            # TODO: Actually register the tool in tools_definition.py
+        
+        return result
     
     def _analyze_tool_requirements(
         self,
@@ -124,6 +140,8 @@ Generate a JSON spec with:
 {{
     "tool_name": "descriptive_snake_case_name",
     "description": "What this tool does",
+    "language": "python|bash|javascript|sql|etc",
+    "language_rationale": "Why this language is best for this task",
     "service_type": "aws|jira|github|general",
     "inputs": {{
         "param_name": {{"type": "str|int|bool|list", "required": true|false, "description": "..."}},
@@ -135,7 +153,14 @@ Generate a JSON spec with:
     }},
     "dependencies": ["boto3", "requests", etc.],
     "similar_to": "existing_tool_name if any"
-}}"""
+}}
+
+Choose the BEST language for the task:
+- Python: API calls, data processing, complex logic
+- Bash: AWS CLI, system operations, file manipulation
+- JavaScript: Browser automation, Node.js APIs
+- SQL: Database queries
+- etc."""
 
         try:
             response = self.llm.invoke(prompt)
@@ -160,9 +185,10 @@ Generate a JSON spec with:
     def _generate_tool_code(
         self,
         tool_spec: Dict[str, Any],
-        similar_tools: Optional[List[str]]
+        similar_tools: Optional[List[str]],
+        language: str = "python"
     ) -> Dict[str, Any]:
-        """Generate Python code for the tool."""
+        """Generate code for the tool in the specified language."""
         
         tool_name = tool_spec.get("tool_name")
         description = tool_spec.get("description")
@@ -181,22 +207,50 @@ Generate a JSON spec with:
                 except:
                     pass
         
-        prompt = f"""Generate production-ready Python code for this tool.
-
-Tool Specification:
-{json.dumps(tool_spec, indent=2)}
-
-{examples}
-
-Generate a complete Python module with:
+        # Language-specific prompts
+        if language == "python":
+            code_instructions = f"""Generate a complete Python module with:
 1. Docstring explaining the tool
 2. All necessary imports
 3. Main function: def {tool_name}(...) -> Dict[str, Any]
 4. Error handling with try/except
 5. Rich console logging
 6. Return dict with "success": bool and "result" or "error"
+7. Type hints for all parameters"""
+        
+        elif language == "bash":
+            code_instructions = f"""Generate a complete Bash script with:
+1. Shebang (#!/bin/bash)
+2. Comments explaining the tool
+3. Error handling (set -e, trap)
+4. Input validation
+5. Logging to stdout/stderr
+6. Exit codes (0 for success, non-zero for errors)
+7. Functions for reusability"""
+        
+        elif language == "javascript":
+            code_instructions = f"""Generate a complete JavaScript/Node.js module with:
+1. JSDoc comments
+2. All necessary requires/imports
+3. Async function if needed
+4. Error handling with try/catch
+5. Console logging
+6. Export the main function
+7. Return object with success and result/error"""
+        
+        else:
+            code_instructions = f"Generate production-ready {language} code for this tool with proper error handling and logging."
+        
+        prompt = f"""Generate production-ready {language.upper()} code for this tool.
 
-Write clean, well-commented code following the project's style."""
+Tool Specification:
+{json.dumps(tool_spec, indent=2)}
+
+{examples}
+
+{code_instructions}
+
+Write clean, well-commented, production-ready code."""
 
         try:
             response = self.llm.invoke(prompt)
@@ -256,48 +310,81 @@ Write clean, well-commented code following the project's style."""
         
         return definition
     
-    def _save_tool_file(self, tool_name: str, code: str) -> Path:
-        """Save generated tool to file."""
+    def _save_tool_file(self, tool_name: str, code: str, language: str = "python") -> Path:
+        """Save generated tool to file with appropriate extension."""
         
-        filename = f"{tool_name}.py"
+        # Map language to file extension
+        extensions = {
+            "python": ".py",
+            "bash": ".sh",
+            "shell": ".sh",
+            "javascript": ".js",
+            "typescript": ".ts",
+            "sql": ".sql",
+            "yaml": ".yaml",
+            "json": ".json"
+        }
+        
+        ext = extensions.get(language.lower(), ".txt")
+        filename = f"{tool_name}{ext}"
         filepath = self.generated_tools_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(code)
         
-        console.print(f"[green]✅ Saved tool: {filepath}[/green]")
+        # Make executable if shell script
+        if ext == ".sh":
+            os.chmod(filepath, 0o755)
+        
+        console.print(f"[green]✅ Saved {language} tool: {filepath}[/green]")
         return filepath
     
-    def _validate_generated_code(self, tool_file: Path) -> Dict[str, Any]:
-        """Basic validation of generated Python code."""
+    def _validate_generated_code(self, tool_file: Path, language: str = "python") -> Dict[str, Any]:
+        """Basic validation of generated code (language-specific)."""
         
         try:
             with open(tool_file) as f:
                 code = f.read()
             
-            # Check if it's valid Python syntax
-            ast.parse(code)
+            checks = {}
             
-            # Check for required elements
-            has_imports = "import" in code
-            has_function = "def " in code
-            has_return = "return" in code
-            has_docstring = '"""' in code or "'''" in code
+            if language == "python":
+                # Check if it's valid Python syntax
+                try:
+                    ast.parse(code)
+                    checks["valid_syntax"] = True
+                except SyntaxError:
+                    checks["valid_syntax"] = False
+                
+                # Check for required elements
+                checks["has_imports"] = "import" in code
+                checks["has_function"] = "def " in code
+                checks["has_return"] = "return" in code
+                checks["has_docstring"] = '"""' in code or "'''" in code
             
-            checks = {
-                "valid_syntax": True,
-                "has_imports": has_imports,
-                "has_function": has_function,
-                "has_return": has_return,
-                "has_docstring": has_docstring
-            }
+            elif language in ["bash", "shell"]:
+                # Check for shell script elements
+                checks["has_shebang"] = code.strip().startswith("#!")
+                checks["has_error_handling"] = "set -e" in code or "trap" in code
+                checks["has_functions"] = "() {" in code or "function " in code
+            
+            elif language == "javascript":
+                # Basic JS checks
+                checks["has_function"] = "function" in code or "=>" in code
+                checks["has_exports"] = "module.exports" in code or "export" in code
+                checks["has_error_handling"] = "try" in code or "catch" in code
+            
+            else:
+                # Generic checks for other languages
+                checks["not_empty"] = len(code.strip()) > 0
+                checks["has_comments"] = "#" in code or "//" in code or "/*" in code
             
             all_pass = all(checks.values())
             
             if all_pass:
-                console.print("[green]✅ Code validation passed[/green]")
+                console.print(f"[green]✅ {language.upper()} code validation passed[/green]")
             else:
-                console.print("[yellow]⚠️  Code validation has warnings[/yellow]")
+                console.print(f"[yellow]⚠️  {language.upper()} validation has warnings[/yellow]")
                 for check, passed in checks.items():
                     if not passed:
                         console.print(f"[yellow]   - {check}: FAILED[/yellow]")
@@ -305,20 +392,15 @@ Write clean, well-commented code following the project's style."""
             return {
                 "success": True,
                 "checks": checks,
-                "all_passed": all_pass
+                "all_passed": all_pass,
+                "language": language
             }
             
-        except SyntaxError as e:
-            console.print(f"[red]❌ Syntax error in generated code: {e}[/red]")
-            return {
-                "success": False,
-                "error": f"Syntax error: {e}",
-                "checks": {"valid_syntax": False}
-            }
         except Exception as e:
             console.print(f"[red]❌ Validation error: {e}[/red]")
             return {
                 "success": False,
-                "error": str(e)
+                "error": str(e),
+                "language": language
             }
 

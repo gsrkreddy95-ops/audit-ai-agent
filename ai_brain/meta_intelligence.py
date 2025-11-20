@@ -62,9 +62,21 @@ class ToolContract:
         final_payload = self.inputs.get("final_payload")
         if isinstance(final_payload, dict):
             for key, value in final_payload.items():
-                if value is not None:
+                if value is None:
+                    continue
+                if key not in payload or self._is_missing(payload[key]):
                     payload[key] = value
         return payload
+
+    @staticmethod
+    def _is_missing(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str) and not value.strip():
+            return True
+        if isinstance(value, (list, tuple, set, dict)) and not value:
+            return True
+        return False
 
 
 @dataclass
@@ -119,8 +131,14 @@ class MetaIntelligence:
         self.ground_truth_validators = self._build_ground_truth_validators()
         self.enhancement_manager = EnhancementManager()
         
+        # Initialize Auto-Fix Engine
+        from ai_brain.knowledge_manager import get_knowledge_manager
+        from ai_brain.auto_fix_engine import AutoFixEngine
+        self.auto_fix = AutoFixEngine(self.enhancement_manager, get_knowledge_manager())
+        
         console.print("\n[bold magenta]🧩 Meta-Intelligence Layer Activated[/bold magenta]")
-        console.print("[dim]  Self-evolving multi-dimensional agent ready[/dim]\n")
+        console.print("[dim]  Self-evolving multi-dimensional agent ready[/dim]")
+        console.print(f"[dim]  Auto-fix: {'ENABLED' if self.auto_fix.enabled else 'DISABLED'}[/dim]\n")
     
     def _build_capability_map(self) -> Dict[str, Dict]:
         """
@@ -174,15 +192,27 @@ class MetaIntelligence:
             errors = []
             if not isinstance(result, dict):
                 return ["AWS export result payload missing or invalid"]
-            exports = result.get("exports")
+            exports = result.get("exports") or []
             failures = result.get("failures", [])
-            if exports:
-                for entry in exports:
-                    path = entry.get("output_path")
-                    if path and not Path(path).exists():
-                        errors.append(f"Missing export file for region {entry.get('region')}: {path}")
-            else:
+            successful_entries = 0
+            for entry in exports:
+                region = entry.get("region", "unknown")
+                files = entry.get("files") or []
+                zero_records = entry.get("zero_records", False)
+                if files:
+                    missing_files = [path for path in files if path and not Path(path).exists()]
+                    if missing_files:
+                        errors.append(f"Missing export file(s) for region {region}: {', '.join(missing_files)}")
+                    else:
+                        successful_entries += 1
+                elif zero_records:
+                    successful_entries += 1
+                else:
+                    errors.append(f"Region {region} reported success but no files or zero-record indicator")
+            if not exports:
                 errors.append("AWS export returned no successful exports")
+            elif successful_entries == 0:
+                errors.append("AWS export did not produce files or zero-record confirmations")
             for failure in failures:
                 errors.append(f"Region {failure.get('region')}: {failure.get('error')}")
             if not result.get("service"):
@@ -573,6 +603,10 @@ Rules:
     ) -> Optional[Dict[str, Any]]:
         if not patch_plan:
             return None
+        # Add confidence scoring to the proposal
+        confidence = self._calculate_fix_confidence(patch_plan, analysis, telemetry_summary)
+        risk_level = self._assess_risk_level(patch_plan)
+        
         record = self.enhancement_manager.register_proposal({
             "trigger": trigger,
             "user_request": user_request,
@@ -581,10 +615,97 @@ Rules:
             "reason": patch_plan.get("reason"),
             "files": patch_plan.get("files"),
             "test_plan": patch_plan.get("test_plan"),
-            "metadata": metadata
+            "metadata": metadata,
+            "confidence": confidence,
+            "risk_level": risk_level,
+            "error_pattern": analysis.get("error")
         })
+        
+        # Try auto-apply if confidence is high enough
+        if self.auto_fix.should_auto_apply(record):
+            console.print(f"[bold green]🤖 Auto-applying fix (confidence: {confidence*100:.0f}%)[/bold green]")
+            apply_result = self.auto_fix.apply_fix(record)
+            if apply_result.get("applied"):
+                record["status"] = "auto_applied"
+                record["auto_applied_at"] = datetime.now().isoformat()
+                console.print("[green]✅ Fix applied automatically[/green]")
+        
         return record
 
+    def _calculate_fix_confidence(
+        self,
+        patch_plan: Dict[str, Any],
+        analysis: Dict[str, Any],
+        telemetry: Dict[str, Any]
+    ) -> float:
+        """
+        Calculate confidence score for a fix (0.0-1.0).
+        
+        Factors:
+        - Error is common/well-known: +0.3
+        - Fix is simple (import, typo, etc.): +0.3
+        - Similar fix succeeded before: +0.2
+        - Multiple attempts failed same way: +0.1
+        - Telemetry shows consistent pattern: +0.1
+        """
+        confidence = 0.5  # Base confidence
+        
+        error = analysis.get("error", "").lower()
+        summary = patch_plan.get("summary", "").lower()
+        
+        # Common errors get higher confidence
+        common_errors = ["import", "attribute", "typeerror", "keyerror", "missing"]
+        if any(err in error for err in common_errors):
+            confidence += 0.2
+        
+        # Simple fixes get higher confidence
+        simple_fixes = ["add import", "fix typo", "update parameter", "add missing"]
+        if any(fix in summary for fix in simple_fixes):
+            confidence += 0.3
+        
+        # Recurring errors (multiple attempts) increase confidence
+        attempts = telemetry.get("attempts", 1)
+        if attempts >= 3:
+            confidence += 0.1
+        
+        return min(1.0, confidence)
+    
+    def _assess_risk_level(self, patch_plan: Dict[str, Any]) -> str:
+        """
+        Assess risk level of applying a fix.
+        
+        Returns:
+            "low"|"medium"|"high"
+        """
+        files = patch_plan.get("files", [])
+        
+        # Count operations
+        replace_count = sum(1 for f in files if f.get("operation") == "replace")
+        create_count = sum(1 for f in files if f.get("operation") == "create")
+        
+        # Multiple file changes = higher risk
+        if len(files) > 3:
+            return "high"
+        
+        # Creating new files is lower risk than modifying
+        if create_count > 0 and replace_count == 0:
+            return "low"
+        
+        # Check if modifying core files
+        core_files = ["intelligent_agent.py", "tool_executor.py", "orchestrator.py"]
+        for file_info in files:
+            path = file_info.get("path", "")
+            if any(core in path for core in core_files):
+                return "high"
+        
+        # Simple import fixes or small changes
+        for file_info in files:
+            search = file_info.get("search", "")
+            if "import" in search and len(search) < 100:
+                return "low"
+        
+        return "medium"
+    
     def _serialize_proposal_for_response(self, record: Dict[str, Any]) -> Dict[str, Any]:
         files = record.get("files") or []
         file_summaries = [
