@@ -158,6 +158,22 @@ class IntelligentAgent:
         # Default minimal iterations keeps chat snappy; evidence collection often needs more tool cycles
         iteration = 0
         dynamic_max = 3
+        
+        # Detect multi-account/region requests and boost iterations
+        recent_text = ' '.join(messages[-3:] if messages else [])
+        if isinstance(recent_text, str):
+            recent_lower = recent_text.lower()
+            
+            # Count accounts mentioned
+            account_count = sum(1 for acc in ['ctr-prod', 'ctr-int', 'ctr-test', 'sxo'] if acc in recent_lower)
+            
+            # Count regions mentioned
+            region_count = sum(1 for reg in ['us-east-1', 'us-west', 'eu-west', 'ap-northeast', 'ap-southeast'] if reg in recent_lower)
+            
+            # Boost for multi-account/region
+            if account_count > 1 or region_count > 2:
+                dynamic_max = max(dynamic_max, account_count * region_count * 2)
+                console.print(f"[dim]   Multi-account/region detected: {account_count} accounts × {region_count} regions[/dim]")
         try:
             recent_window = []
             for m in reversed(messages[-6:]):
