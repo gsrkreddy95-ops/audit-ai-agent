@@ -183,10 +183,12 @@ def main():
     # Main chat loop
     while True:
         try:
-            # Get user input
+            # Get user input (with warning suppression for async conflicts)
             if use_prompt_toolkit and session:
                 try:
-                    user_input = session.prompt("\n[You] > ")
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        user_input = session.prompt("\n[You] > ")
                 except RuntimeError as e:
                     # Event loop conflict - fall back silently
                     if "asyncio" in str(e).lower() or "event loop" in str(e).lower():
@@ -196,15 +198,26 @@ def main():
                         console.print("[dim]💡 Switched to basic input (asyncio conflict)[/dim]")
                     else:
                         console.print(f"[yellow]⚠️ Input error: {str(e)[:60]}[/yellow]")
-                    user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+                    
+                    # Use basic input with warning suppression
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
                 except Exception as e:
                     # Other prompt_toolkit failures
                     console.print(f"[yellow]⚠️ Prompt error: {str(e)[:60]}[/yellow]")
                     use_prompt_toolkit = False
                     session = None
-                    user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+                    
+                    # Use basic input with warning suppression
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
             else:
-                user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+                # Use basic input with warning suppression
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", RuntimeWarning)
+                    user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
             
             if not user_input.strip():
                 continue
