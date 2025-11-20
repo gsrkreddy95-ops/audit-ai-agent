@@ -321,6 +321,93 @@ class KnowledgeManager:
         
         return None
     
+    def get_context_for_llm(self, limit: int = 10) -> str:
+        """
+        Get a summary of knowledge base for LLM context.
+        
+        Args:
+            limit: Maximum number of facts to include per domain
+            
+        Returns:
+            JSON string with knowledge summary
+        """
+        context = {}
+        
+        for domain, data in self.knowledge.items():
+            if domain == "meta":
+                continue
+            
+            domain_context = {}
+            
+            # Include learned facts (most recent first)
+            if "learned_facts" in data:
+                facts = data["learned_facts"]
+                sorted_facts = sorted(
+                    facts.items(),
+                    key=lambda x: x[1].get("learned_at", ""),
+                    reverse=True
+                )[:limit]
+                
+                domain_context["learned_facts"] = {
+                    key: {
+                        "value": value["value"],
+                        "source": value.get("source", "unknown"),
+                        "confidence": value.get("confidence", 1.0)
+                    }
+                    for key, value in sorted_facts
+                }
+            
+            # Include other relevant data (but not all details)
+            for key, value in data.items():
+                if key != "learned_facts" and not key.startswith("_"):
+                    # Only include small, useful data
+                    if isinstance(value, (str, int, float, bool)):
+                        domain_context[key] = value
+                    elif isinstance(value, (list, dict)) and len(str(value)) < 500:
+                        domain_context[key] = value
+            
+            if domain_context:
+                context[domain] = domain_context
+        
+        return json.dumps(context, indent=2)
+    
+    def learn_fact(
+        self,
+        domain: str,
+        fact_key: str,
+        fact_value: Any,
+        source: str = "agent_experience",
+        confidence: float = 1.0
+    ) -> None:
+        """
+        Alias for learn() method for backward compatibility.
+        
+        Args:
+            domain: Domain (aws, jira, etc.)
+            fact_key: Unique key for this fact
+            fact_value: The learned information
+            source: Where this came from
+            confidence: How confident we are (0.0-1.0)
+        """
+        self.learn(domain, fact_key, fact_value, source, confidence)
+    
+    def get_fact(self, domain: str, fact_key: str) -> Optional[Any]:
+        """
+        Get a specific learned fact.
+        
+        Args:
+            domain: Domain name
+            fact_key: Fact key
+            
+        Returns:
+            Fact value if found, None otherwise
+        """
+        learned = self.knowledge.get(domain, {}).get("learned_facts", {})
+        fact = learned.get(fact_key)
+        if fact:
+            return fact.get("value")
+        return None
+    
     def export_knowledge(self, output_file: Optional[str] = None) -> str:
         """
         Export knowledge base to JSON file.
