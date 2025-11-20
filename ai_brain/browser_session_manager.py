@@ -41,6 +41,7 @@ class BrowserSessionManager:
     _navigation_history = []
     _last_authenticated_account = None
     _last_authenticated_region = None
+    _account_role_preferences: Dict[str, str] = {}
 
     @classmethod
     def _is_invalid_session_error(cls, error: Exception) -> bool:
@@ -144,7 +145,7 @@ class BrowserSessionManager:
         return cls._browser_instance
     
     @classmethod
-    def authenticate_aws(cls, account: str, region: str = "us-east-1") -> bool:
+    def authenticate_aws(cls, account: str, region: str = "us-east-1", role_name: Optional[str] = None) -> bool:
         """
         Authenticate to AWS (only if not already authenticated).
         
@@ -159,17 +160,33 @@ class BrowserSessionManager:
         if not browser:
             return False
         
-        # ROBUST CHECK: Verify if actually on AWS Console (not just flag)
+        account_key = (account or "").lower()
+        preferred_role = role_name or cls._account_role_preferences.get(account_key)
+        
+        # ROBUST CHECK: Verify if actually on AWS Console AND in the correct account
         try:
             current_url = browser.driver.current_url if browser.driver else None
             if current_url and 'console.aws.amazon.com' in current_url:
-                cls._authenticated_accounts.add(account)
-                cls._last_authenticated_account = account
-                console.print(f"[green]✅ Already on AWS Console for {account}! (Session active)[/green]")
-                cls._refresh_current_region(reason="existing session")
-                cls._dismiss_cookie_banner()
-                return True
-        except Exception:
+                # Verify the account actually matches
+                active_account = cls._get_active_aws_account(browser)
+                
+                if active_account and active_account == account:
+                    cls._authenticated_accounts.add(account)
+                    cls._last_authenticated_account = account
+                    console.print(f"[green]✅ Already on AWS Console for {account}! (Session active, verified)[/green]")
+                    cls._refresh_current_region(reason="existing session")
+                    cls._dismiss_cookie_banner()
+                    return True
+                elif active_account and active_account != account:
+                    console.print(f"[yellow]⚠️  Console is on {active_account}, but {account} was requested - re-authenticating...[/yellow]")
+                    # Force re-auth by clearing the old session
+                    cls._authenticated_accounts.discard(active_account)
+                    # Fall through to authentication below
+                else:
+                    console.print(f"[yellow]⚠️  Could not verify active account - re-authenticating to be safe...[/yellow]")
+                    # Fall through to authentication
+        except Exception as e:
+            console.print(f"[dim]Account verification error: {str(e)[:50]}[/dim]")
             pass
 
         # Check if already authenticated to this account (from previous session)
@@ -183,12 +200,16 @@ class BrowserSessionManager:
         console.print(f"[cyan]🔐 Authenticating to AWS account: {account}[/cyan]")
 
         # Perform Duo SSO authentication
-        if browser.authenticate_aws_duo_sso(account_name=account):
+        if browser.authenticate_aws_duo_sso(account_name=account, role_name=preferred_role):
             cls._authenticated_accounts.add(account)
             cls._last_authenticated_account = account
             console.print(f"[green]✅ Authenticated to {account} successfully![/green]")
             cls._refresh_current_region(reason="post-authentication")
             cls._dismiss_cookie_banner()
+            selected_role = getattr(browser, "last_role_selected", None) or preferred_role
+            if selected_role:
+                cls._account_role_preferences[account_key] = selected_role
+                console.print(f"[dim]🔐 Role selected for {account}: {selected_role}[/dim]")
             return True
         else:
             console.print(f"[red]❌ Authentication to {account} failed[/red]")
@@ -707,6 +728,64 @@ class BrowserSessionManager:
 
         return None
 
+    @classmethod
+    def _get_active_aws_account(cls, browser) -> Optional[str]:
+        """
+        Detect which AWS account is actually active in the browser.
+        
+        Scrapes the account dropdown/menu to find the account name or ID.
+        
+        Returns:
+            Account name/identifier if detected, None otherwise
+        """
+        driver = getattr(browser, 'driver', None)
+        if not driver:
+            return None
+        
+        try:
+            # Try to extract account info from AWS Console UI
+            account_info = driver.execute_script("""
+                // Try multiple methods to find active account
+                
+                // Method 1: Account dropdown (nav menu)
+                var accountMenu = document.querySelector('[data-testid="awsui-account-menu"]') || 
+                                  document.querySelector('[id*="account-menu"]') ||
+                                  document.querySelector('[aria-label*="account" i]');
+                if (accountMenu) {
+                    var text = accountMenu.innerText || accountMenu.textContent || '';
+                    // Look for account patterns like "ctr-prod", "ctr-int", or "372070498991"
+                    var accountMatch = text.match(/(ctr-[a-z]+|sxo\\d+|\\d{12})/i);
+                    if (accountMatch) {
+                        return accountMatch[1].toLowerCase();
+                    }
+                }
+                
+                // Method 2: Page title or header
+                var title = document.title || '';
+                var accountMatch = title.match(/(ctr-[a-z]+|sxo\\d+)/i);
+                if (accountMatch) {
+                    return accountMatch[1].toLowerCase();
+                }
+                
+                // Method 3: URL parameters or breadcrumbs
+                var url = window.location.href;
+                var urlMatch = url.match(/account[=\\/]([a-z0-9-]+)/i);
+                if (urlMatch) {
+                    return urlMatch[1].toLowerCase();
+                }
+                
+                return null;
+            """)
+            
+            if account_info:
+                console.print(f"[dim]🔍 Detected active account: {account_info}[/dim]")
+                return account_info.lower().strip()
+            
+        except Exception as e:
+            console.print(f"[dim]Account detection error: {str(e)[:50]}[/dim]")
+        
+        return None
+    
     @classmethod
     def _refresh_current_region(cls, reason: str = "", browser=None) -> Optional[str]:
         """Update the cached region based on the active console view"""
