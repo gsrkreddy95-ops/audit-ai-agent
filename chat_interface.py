@@ -7,6 +7,7 @@ import os
 import sys
 import signal
 import atexit
+import asyncio
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -148,28 +149,62 @@ def main():
     
     # Initialize prompt session with history support
     history_file = os.path.join(os.path.dirname(__file__), '.chat_history')
-    session = PromptSession(
-        history=FileHistory(history_file),
-        auto_suggest=AutoSuggestFromHistory(),
-        enable_history_search=True
-    )
+    
+    # Try to use prompt_toolkit, but gracefully fallback if it conflicts with asyncio
+    use_prompt_toolkit = True
+    session = None
+    
+    try:
+        # Check if an event loop is already running
+        import asyncio
+        try:
+            running_loop = asyncio.get_running_loop()
+            # If we got here, a loop is already running - can't use prompt_toolkit
+            console.print("[yellow]⚠️ Asyncio event loop already active - using basic input mode (no arrow-key history)[/yellow]")
+            use_prompt_toolkit = False
+        except RuntimeError:
+            # No running loop - safe to use prompt_toolkit
+            session = PromptSession(
+                history=FileHistory(history_file),
+                auto_suggest=AutoSuggestFromHistory(),
+                enable_history_search=True
+            )
+    except Exception as e:
+        console.print(f"[yellow]⚠️ Could not initialize prompt_toolkit: {e}[/yellow]")
+        use_prompt_toolkit = False
     
     # Show initial prompt
     console.print("[bold cyan]💬 How can I help you today?[/bold cyan]")
-    console.print("[dim]💡 Tip: Use ↑/↓ arrow keys to navigate previous commands[/dim]")
+    if use_prompt_toolkit and session:
+        console.print("[dim]💡 Tip: Use ↑/↓ arrow keys to navigate previous commands[/dim]")
+    else:
+        console.print("[dim]💡 Command history saved to .chat_history (arrow keys not available)[/dim]")
     
     # Main chat loop
     while True:
         try:
-            # Get user input with history support (fallback to basic prompt if event loop already running)
-            try:
-                user_input = session.prompt("\n[You] > ")
-            except RuntimeError as prompt_err:
-                if "asyncio.run()" in str(prompt_err):
-                    console.print("[yellow]⚠️ Prompt toolkit couldn't acquire the event loop; falling back to basic input.[/yellow]")
+            # Get user input
+            if use_prompt_toolkit and session:
+                try:
+                    user_input = session.prompt("\n[You] > ")
+                except RuntimeError as e:
+                    # Event loop conflict - fall back silently
+                    if "asyncio" in str(e).lower() or "event loop" in str(e).lower():
+                        # Silent fallback for asyncio conflicts
+                        use_prompt_toolkit = False
+                        session = None
+                        console.print("[dim]💡 Switched to basic input (asyncio conflict)[/dim]")
+                    else:
+                        console.print(f"[yellow]⚠️ Input error: {str(e)[:60]}[/yellow]")
                     user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
-                else:
-                    raise
+                except Exception as e:
+                    # Other prompt_toolkit failures
+                    console.print(f"[yellow]⚠️ Prompt error: {str(e)[:60]}[/yellow]")
+                    use_prompt_toolkit = False
+                    session = None
+                    user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
+            else:
+                user_input = Prompt.ask("\n[bold cyan]You[/bold cyan]")
             
             if not user_input.strip():
                 continue
