@@ -183,8 +183,21 @@ class IntelligentAgent:
         dynamic_max = 3
         
         # Detect multi-account/region requests and boost iterations
-        recent_text = ' '.join(messages[-3:] if messages else [])
-        if isinstance(recent_text, str):
+        # Extract text content from messages (messages are dicts with 'content' key)
+        recent_window = []
+        for m in messages[-3:] if messages else []:
+            if isinstance(m, dict):
+                content = m.get('content', '')
+                if isinstance(content, str):
+                    recent_window.append(content)
+                elif isinstance(content, list):
+                    # Tool result blocks may be list; skip
+                    continue
+            elif isinstance(m, str):
+                recent_window.append(m)
+        
+        recent_text = ' '.join(recent_window)
+        if recent_text:
             recent_lower = recent_text.lower()
             
             # Count accounts mentioned
@@ -197,14 +210,20 @@ class IntelligentAgent:
             if account_count > 1 or region_count > 2:
                 dynamic_max = max(dynamic_max, account_count * region_count * 2)
                 console.print(f"[dim]   Multi-account/region detected: {account_count} accounts × {region_count} regions[/dim]")
+        
         try:
+            # Also check for evidence collection keywords in recent messages
             recent_window = []
             for m in reversed(messages[-6:]):
-                if isinstance(m.get('content'), str):
-                    recent_window.append(m['content'])
-                elif isinstance(m.get('content'), list):
-                    # Tool result blocks may be list; skip
-                    continue
+                if isinstance(m, dict):
+                    content = m.get('content', '')
+                    if isinstance(content, str):
+                        recent_window.append(content)
+                    elif isinstance(content, list):
+                        # Tool result blocks may be list; skip
+                        continue
+                elif isinstance(m, str):
+                    recent_window.append(m)
             recent_text = ' '.join(recent_window).lower()
             evidence_keywords = [
                 'collect evidence', 'evidence plan', 'download', 'screenshot', 'rfi', 'previous year', 'sharepoint'
