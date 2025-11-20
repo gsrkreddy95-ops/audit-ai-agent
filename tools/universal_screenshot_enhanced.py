@@ -14,6 +14,7 @@ from typing import Dict, Optional, Tuple, List, Callable, TYPE_CHECKING
 from enum import Enum
 from urllib.parse import urlparse
 import io
+from rich.prompt import Prompt
 
 try:
     import undetected_chromedriver as uc
@@ -124,6 +125,7 @@ class UniversalScreenshotEnhanced:
         self.playwright = None
         self.browser_pw = None
         self.page = None
+        self.last_role_selected: Optional[str] = None
         
         # AWS Federation attributes (bypasses SAML sign-in button!)
         self.federation_auth = None
@@ -363,13 +365,14 @@ class UniversalScreenshotEnhanced:
             return False
     
     # ==================== AWS DUO SSO AUTHENTICATION (OLD BUTTON-CLICKING APPROACH) ====================
-    def authenticate_aws_duo_sso(self, duo_url: str = None, wait_timeout: int = 300, account_name: str = None) -> bool:
+    def authenticate_aws_duo_sso(self, duo_url: str = None, wait_timeout: int = 300, account_name: str = None, role_name: str = None) -> bool:
         """Navigate to Duo SSO and wait for authentication to complete.
         
         Args:
             duo_url: The Duo SSO URL. If None, uses default CTR Duo URL.
             wait_timeout: Max seconds to wait for authentication (default 5 min)
             account_name: AWS account to auto-select (e.g., 'ctr-prod', 'ctr-int'). If None, manual selection required.
+            role_name: Desired AWS role name (e.g., 'ROAdmin'). Used as preference when multiple roles exist.
             
         Returns:
             True if successfully authenticated and reached console, False otherwise
@@ -470,7 +473,7 @@ class UniversalScreenshotEnhanced:
                         try:
                             console.print(f"[dim]   Strategy 2: JavaScript with smart search...[/dim]")
                             # Click the session link (prefer account name match)
-                            clicked_js = self.driver.execute_script("""
+                            clicked_js = self.driver.execute_script(r"""
                                 var accountName = (arguments[0] || '').toLowerCase();
                                 console.log('Looking for session link, account:', accountName);
 
@@ -723,7 +726,7 @@ class UniversalScreenshotEnhanced:
                 if current_url and '/saml' in current_url and 'aws.amazon.com' in current_url:
                     console.print(f"[yellow]🎯 On SAML role selection page - clicking Sign in...[/yellow]")
                     # Try to click the sign-in button (don't navigate away!)
-                    if self._click_management_console_button(account_name):
+                    if self._click_management_console_button(account_name, requested_role_name=role_name):
                         console.print(f"[green]✅ Successfully signed in![/green]")
                         return True
                     else:
@@ -802,7 +805,7 @@ class UniversalScreenshotEnhanced:
                                 # IMPORTANT: On SAML page, roles are already visible
                                 # DON'T click account name (it will collapse roles!)
                                 # Go DIRECTLY to role selection
-                                if self._click_management_console_button(account_name=account_name):
+                                if self._click_management_console_button(account_name=account_name, requested_role_name=role_name):
                                     account_selected = True
                                     time.sleep(3)
                                 else:
@@ -818,7 +821,7 @@ class UniversalScreenshotEnhanced:
                                     time.sleep(5)  # Wait for role selection page to load
                                     
                                     # After selecting account, look for role selection
-                                    if self._click_management_console_button(account_name=account_name):
+                                    if self._click_management_console_button(account_name=account_name, requested_role_name=role_name):
                                         time.sleep(3)
                                     else:
                                         time.sleep(3)
@@ -899,8 +902,225 @@ class UniversalScreenshotEnhanced:
         except Exception as e:
             console.print(f"[yellow]⚠️  Account selection failed: {e}[/yellow]")
             return False
+
+    def _collect_account_roles(self, account_name: Optional[str] = None) -> List[Dict[str, str]]:
+        """Gather available roles for the specified account on the SAML page."""
+        try:
+            target = (account_name or "").lower()
+            roles = self.driver.execute_script(
+                """
+                const accountFilter = arguments[0];
+                const radios = Array.from(document.querySelectorAll('input[type="radio"][name="roleIndex"]'));
+                const matches = [];
+                radios.forEach((radio) => {
+                    let container = radio.parentElement;
+                    let guard = 0;
+                    let accountText = '';
+                    while (container && guard < 15) {
+                        const text = (container.textContent || '').trim();
+                        if (text.includes('Account:')) {
+                            accountText = text.replace(/\\s+/g, ' ').trim();
+                            break;
+                        }
+                        container = container.parentElement;
+                        guard += 1;
+                    }
+                    if (!accountText) {
+                        return;
+                    }
+                    const accountLower = accountText.toLowerCase();
+                    if (accountFilter && accountLower.indexOf(accountFilter) === -1) {
+                        return;
+                    }
+                    let roleName = '';
+                    const label = document.querySelector('label[for=\"' + radio.id + '\"]');
+                    if (label) {
+                        roleName = label.textContent.trim();
+                    } else if (radio.parentElement) {
+                        roleName = (radio.parentElement.textContent || '').trim().split('\\n')[0];
+                    }
+                    matches.push({
+                        radioId: radio.id || '',
+                        roleName: roleName || '',
+                        accountText: accountText
+                    });
+                });
+                return matches;
+                """,
+                target
+            )
+            return roles or []
+        except Exception as exc:
+            console.print(f"[yellow]⚠️  Unable to collect roles: {exc}[/yellow]")
+            return []
+
+    def _prompt_for_role_choice(
+        self,
+        account_name: str,
+        roles: List[Dict[str, str]],
+        suggested_index: int
+    ) -> Dict[str, str]:
+        """Prompt the user to choose a role when multiple options exist."""
+        if not roles:
+            return {}
+        
+        console.print(f"\n[bold yellow]🔐 Multiple roles available for '{account_name}'[/bold yellow]")
+        for idx, entry in enumerate(roles, start=1):
+            label = entry.get("roleName") or f"Role {idx}"
+            marker = "📖 [SUGGESTED]" if idx - 1 == suggested_index else ""
+            console.print(f"  {idx}. {label} {marker}")
+        
+        default_desc = roles[suggested_index].get("roleName") or f"Role {suggested_index + 1}"
+        console.print(f"\n[cyan]💡 Default: {suggested_index + 1} ({default_desc})[/cyan]")
+        
+        while True:
+            from rich.prompt import Prompt
+            choice = Prompt.ask(
+                f"\n[bold]Which role should I use for {account_name}?[/bold] (1-{len(roles)} or press Enter for default)",
+                default=str(suggested_index + 1)
+            ).strip()
+            
+            if not choice:
+                selected = roles[suggested_index]
+                console.print(f"[green]✅ Using default role: {selected.get('roleName')}[/green]")
+                return selected
+            
+            if choice.isdigit():
+                idx = int(choice) - 1
+                if 0 <= idx < len(roles):
+                    selected = roles[idx]
+                    console.print(f"[green]✅ Selected role: {selected.get('roleName')}[/green]")
+                    return selected
+            else:
+                # Partial name match
+                lowered = choice.lower()
+                for entry in roles:
+                    name = (entry.get("roleName") or "").lower()
+                    if lowered and lowered in name:
+                        console.print(f"[green]✅ Matched role: {entry.get('roleName')}[/green]")
+                        return entry
+            
+            console.print("[yellow]⚠️  Invalid selection. Please enter a number (1-{len(roles)}) or part of the role name.[/yellow]")
+
+    def _choose_role_entry(
+        self,
+        account_name: str,
+        roles: List[Dict[str, str]],
+        requested_role_name: Optional[str] = None
+    ) -> Optional[Dict[str, str]]:
+        """Determine which role entry to use, preferring requested/read-only roles."""
+        if not roles:
+            console.print("[red]❌ No roles available for selection[/red]")
+            return None
+        
+        # Single role available - use it immediately
+        if len(roles) == 1:
+            only_role = roles[0].get("roleName") or "Role"
+            console.print(f"[cyan]🎯 Single role available: '{only_role}' - selecting automatically[/cyan]")
+            return roles[0]
+        
+        def find_match(name: Optional[str]) -> Optional[Dict[str, str]]:
+            if not name:
+                return None
+            target = name.lower()
+            for entry in roles:
+                role_name = (entry.get("roleName") or "").lower()
+                if target in role_name:
+                    return entry
+            return None
+        
+        if requested_role_name:
+            match = find_match(requested_role_name)
+            if match:
+                console.print(f"[cyan]🎯 Using requested role '{match.get('roleName')}'[/cyan]")
+                return match
+            console.print(
+                f"[yellow]⚠️  Requested role '{requested_role_name}' not found for {account_name}. Showing options...[/yellow]"
+            )
+        
+        # Multiple roles - detect read-only and prompt user
+        read_only_keywords = ("read", "view", "ro", "readonly", "read-only", "read_only")
+        suggested_index = 0
+        for idx, entry in enumerate(roles):
+            role_lower = (entry.get("roleName") or "").lower()
+            # Check if role name contains read-only indicators
+            if any(keyword in role_lower for keyword in read_only_keywords):
+                suggested_index = idx
+                console.print(f"[cyan]📖 Detected read-only role: '{entry.get('roleName')}' - suggesting as default[/cyan]")
+                break
+        
+        # Always prompt when multiple roles exist
+        return self._prompt_for_role_choice(account_name, roles, suggested_index)
+
+    def _select_role_entry(self, role_entry: Dict[str, str]) -> bool:
+        """Click the radio button associated with the chosen role."""
+        radio_id = role_entry.get("radioId")
+        role_label = role_entry.get("roleName") or "selected role"
+        
+        console.print(f"[cyan]🎯 Selecting role: {role_label}[/cyan]")
+        
+        # Strategy 1: Click by radio ID
+        if radio_id:
+            try:
+                radio_elem = self.driver.find_element(By.ID, radio_id)
+                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", radio_elem)
+                time.sleep(0.3)
+                radio_elem.click()
+                time.sleep(0.5)
+                
+                # Verify it's checked
+                if radio_elem.is_selected():
+                    console.print(f"[green]✅ Role radio button selected: {role_label}[/green]")
+                    return True
+                else:
+                    console.print(f"[yellow]⚠️  Radio not checked after click, trying label...[/yellow]")
+            except Exception as e:
+                console.print(f"[yellow]⚠️  Radio click by ID failed: {str(e)[:60]}[/yellow]")
+        
+        # Strategy 2: Click via label
+        try:
+            label = self.driver.find_element(
+                By.XPATH,
+                f"//label[contains(normalize-space(.), '{role_label}')]"
+            )
+            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", label)
+            time.sleep(0.3)
+            label.click()
+            time.sleep(0.5)
+            console.print(f"[green]✅ Role selected via label: {role_label}[/green]")
+            return True
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Label click failed: {str(e)[:60]}[/yellow]")
+        
+        # Strategy 3: JavaScript force-click
+        if radio_id:
+            try:
+                clicked = self.driver.execute_script("""
+                    const radio = document.getElementById(arguments[0]);
+                    if (radio) {
+                        radio.checked = true;
+                        radio.click();
+                        const event = new Event('change', { bubbles: true });
+                        radio.dispatchEvent(event);
+                        return radio.checked;
+                    }
+                    return false;
+                """, radio_id)
+                
+                if clicked:
+                    console.print(f"[green]✅ Role selected via JavaScript: {role_label}[/green]")
+                    return True
+            except Exception as e:
+                console.print(f"[yellow]⚠️  JavaScript force-click failed: {str(e)[:60]}[/yellow]")
+        
+        console.print(f"[red]❌ Could not select role '{role_label}' - all strategies failed[/red]")
+        return False
     
-    def _click_management_console_button(self, account_name: str = None) -> bool:
+    def _click_management_console_button(
+        self,
+        account_name: str = None,
+        requested_role_name: Optional[str] = None
+    ) -> bool:
         """After account selection, click on role radio button and submit for AWS SAML signin"""
         try:
             # Safety check: Ensure driver and URL exist
@@ -921,462 +1141,286 @@ class UniversalScreenshotEnhanced:
             
             # Check if we're on AWS SAML role selection page (signin.aws.amazon.com/saml)
             if 'signin.aws' in current_url and 'saml' in current_url:
-                # Strategy 1: Use JavaScript to find and click the correct radio button
-                if account_name:
+                roles = self._collect_account_roles(account_name)
+                if not roles:
+                    console.print("[red]❌ No radio buttons detected on the SAML role selection page[/red]")
+                    return False
+                
+                chosen_entry = self._choose_role_entry(
+                    account_name or "selected account",
+                    roles,
+                    requested_role_name=requested_role_name
+                )
+                if not chosen_entry:
+                    console.print("[red]❌ Role selection aborted[/red]")
+                    return False
+                
+                if not self._select_role_entry(chosen_entry):
+                    return False
+                
+                self.last_role_selected = chosen_entry.get("roleName")
+                role_name = chosen_entry.get("roleName", "Unknown")
+                radio_id = chosen_entry.get("radioId", "")
+                result = {"success": True, "role": role_name, "radioId": radio_id, "account": account_name}
+
+                # CRITICAL: Verify radio is actually checked using Python
+                time.sleep(1)
+                try:
+                    if radio_id:
+                        radio_elem = self.driver.find_element(By.ID, radio_id)
+                        if not radio_elem.is_selected():
+                            radio_elem.click()
+                            time.sleep(0.5)
+                            if not radio_elem.is_selected():
+                                try:
+                                    label = self.driver.find_element(By.XPATH, f"//label[@for='{radio_id}']")
+                                    label.click()
+                                    time.sleep(0.5)
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                
+                time.sleep(1)
+                
+                console.print("[bold cyan]Clicking Sign in button...[/bold cyan]")
+                
+                # STRATEGY 0: Wait for page to fully load AND prepare page
+                try:
+                    console.print("[dim]⏳ Waiting for page to fully load...[/dim]")
                     
-                    # BULLETPROOF SIMPLE APPROACH: For each radio, find its account section
-                    result = self.driver.execute_script("""
-                        var accountName = arguments[0];
-                        console.log('=== AWS SAML Auto-Selection (SIMPLE) ===');
-                        console.log('Target account:', accountName);
+                    # Wait for Sign in button to appear (up to 10 seconds)
+                    button_found = False
+                    for i in range(10):
+                        button_count = self.driver.execute_script("""
+                            var buttons = document.querySelectorAll('button, input[type="submit"]');
+                            return buttons.length;
+                        """)
+                        if button_count > 0:
+                            console.print(f"[dim]   ✅ Found {button_count} buttons on page[/dim]")
+                            button_found = True
+                            break
+                        time.sleep(1)
+                    
+                    if not button_found:
+                        console.print("[yellow]   ⚠️  No buttons found, but continuing anyway...[/yellow]")
+                    
+                    # Now prepare the page
+                    console.print("[dim]🧹 Preparing page (removing overlays, enabling buttons)...[/dim]")
+                    self.driver.execute_script("""
+                        // Remove ALL overlays and modals
+                        var overlays = document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="backdrop"]');
+                        overlays.forEach(el => el.remove());
                         
-                        // Find ALL radio buttons
-                        var allRadios = document.querySelectorAll('input[type="radio"][name="roleIndex"]');
-                        console.log('Total radio buttons found:', allRadios.length);
-                        
-                        if (allRadios.length === 0) {
-                            console.log('ERROR: No radio buttons found');
-                            return {success: false, message: 'No radio buttons found'};
-                        }
-                        
-                        // For each radio, walk up the DOM to find which account section it belongs to
-                        var targetRadio = null;
-                        var roleName = '';
-                        
-                        for (var i = 0; i < allRadios.length; i++) {
-                            var radio = allRadios[i];
-                            console.log('Checking radio button', i + 1, 'of', allRadios.length);
-                            
-                            // Walk up from the radio button to find the account header
-                            var current = radio.parentElement;
-                            var foundAccountHeader = false;
-                            var accountText = '';
-                            
-                            // Go up the DOM tree
-                            while (current && current !== document.body) {
-                                var text = current.textContent || '';
-                                
-                                // Check if this element or its siblings contain "Account:"
-                                if (text.indexOf('Account:') !== -1) {
-                                    // FLEXIBLE MATCHING: Convert to lowercase and check if account name appears ANYWHERE in the text
-                                    var textLower = text.toLowerCase();
-                                    var accountNameLower = accountName.toLowerCase();
-                                    
-                                    // Check if our target account name is in this section (case-insensitive, partial match)
-                                    if (textLower.indexOf(accountNameLower) !== -1) {
-                                        console.log('✓ Found radio under account:', accountName);
-                                        console.log('  Full account text:', text.substring(0, 100));
-                                        targetRadio = radio;
-                                        foundAccountHeader = true;
-                                        
-                                        // Get role name from label
-                                        var label = document.querySelector('label[for="' + radio.id + '"]');
-                                        if (label) {
-                                            roleName = label.textContent.trim();
-                                        } else {
-                                            // Try to get from parent text
-                                            var parent = radio.parentElement;
-                                            if (parent && parent.textContent) {
-                                                var parentText = parent.textContent.trim();
-                                                // Simple split - just get first line
-                                                var lines = parentText.split('\\n');
-                                                roleName = lines[0].trim();
-                                            }
-                                        }
-                                        console.log('Role name:', roleName);
-                                        break;
-                                    } else {
-                                        // This radio belongs to a different account
-                                        console.log('✗ Radio belongs to different account (found:', text.substring(0, 50), ')');
-                                        break;
-                                    }
-                                }
-                                current = current.parentElement;
-                            }
-                            
-                            if (targetRadio) break;
-                        }
-                        
-                        if (!targetRadio) {
-                            console.log('ERROR: No radio button found under account:', accountName);
-                            console.log('Available accounts:');
-                            var accountHeaders = document.querySelectorAll('*');
-                            var accounts = [];
-                            for (var i = 0; i < accountHeaders.length; i++) {
-                                var elem = accountHeaders[i];
-                                var text = elem.textContent || '';
-                                if (text.indexOf('Account:') === 0 && text.length < 100) {
-                                    // Simple split - just get first line
-                                    var lines = text.trim().split('\\n');
-                                    accounts.push(lines[0]);
-                                }
-                            }
-                            console.log('Found accounts:', accounts.join(', '));
-                            return {success: false, message: 'No radio button found', availableAccounts: accounts};
-                        }
-                        
-                        // AGGRESSIVE MULTI-STRATEGY CLICKING
-                        console.log('Attempting to click radio button...');
-                        
-                        // Strategy 1: Set checked and trigger events
-                        targetRadio.checked = true;
-                        
-                        // Strategy 2: Dispatch change event
-                        var changeEvent = new Event('change', { bubbles: true });
-                        targetRadio.dispatchEvent(changeEvent);
-                        
-                        // Strategy 3: Dispatch click event
-                        var clickEvent = new MouseEvent('click', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
+                        // Force enable ALL buttons
+                        var buttons = document.querySelectorAll('button, input[type="submit"]');
+                        console.log('Preparing', buttons.length, 'buttons');
+                        buttons.forEach(btn => {
+                            btn.disabled = false;
+                            btn.removeAttribute('disabled');
+                            btn.style.pointerEvents = 'auto';
+                            btn.style.opacity = '1';
                         });
-                        targetRadio.dispatchEvent(clickEvent);
                         
-                        // Strategy 4: Direct click
-                        targetRadio.click();
+                        // Scroll to bottom
+                        window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
                         
-                        // Strategy 5: Focus and click
-                        targetRadio.focus();
-                        targetRadio.click();
-                        
-                        // Strategy 6: Click the label if it exists
-                        try {
-                            var label = document.querySelector('label[for="' + targetRadio.id + '"]');
-                            if (label) {
-                                console.log('Clicking label...');
-                                label.click();
-                            }
-                        } catch (e) {
-                            console.log('Label click skipped');
-                        }
-                        
-                        // Strategy 7: Click parent element (sometimes radio is wrapped)
-                        try {
-                            var parent = targetRadio.parentElement;
-                            if (parent && parent.tagName === 'LABEL') {
-                                console.log('Clicking parent label...');
-                                parent.click();
-                            }
-                        } catch (e) {
-                            console.log('Parent click skipped');
-                        }
-                        
-                        // Verify selection worked
-                        setTimeout(function() {
-                            console.log('Final radio state - checked:', targetRadio.checked);
-                        }, 100);
-                        
-                        console.log('SUCCESS: Selected role:', roleName, 'for account:', accountName);
-                        return {success: true, role: roleName, account: accountName, radioId: targetRadio.id};
-                    """, account_name)
-                    
-                    if result and result.get('success'):
-                        role_name = result.get('role', 'Unknown')
-                        radio_id = result.get('radioId', '')
-                        
-                        # CRITICAL: Verify radio is actually checked using Python
+                        console.log('Page prepared for sign-in button click');
+                    """)
+                    time.sleep(2)  # Give time for scroll animation
+                except Exception as e:
+                    console.print(f"[dim]   Page prep skipped: {str(e)[:40]}[/dim]")
+                
+                # Strategy 0.5: Directly submit the AWS SAML form before other fallbacks
+                if self._force_saml_sign_in_direct():
+                    # Wait for navigation to AWS Console
+                    console.print("[dim]⏳ Waiting for AWS Console to load...[/dim]")
+                    for wait_attempt in range(15):  # 15 seconds max
                         time.sleep(1)
                         try:
-                            # Find the radio button and verify it's checked
-                            if radio_id:
-                                radio_elem = self.driver.find_element(By.ID, radio_id)
-                                if not radio_elem.is_selected():
-                                    # Try clicking with Selenium as fallback
-                                    radio_elem.click()
-                                    time.sleep(0.5)
-                                    if not radio_elem.is_selected():
-                                        # Try finding and clicking the label
-                                        try:
-                                            label = self.driver.find_element(By.XPATH, f"//label[@for='{radio_id}']")
-                                            label.click()
-                                            time.sleep(0.5)
-                                        except:
-                                            pass
-                        except Exception as e:
+                            current_url = self.driver.current_url
+                            if 'console.aws.amazon.com' in current_url:
+                                console.print("[green]✅ AWS Console reached![/green]")
+                                return True
+                        except:
+                            pass
+                    console.print("[yellow]⚠️  Console didn't load after sign-in, continuing...[/yellow]")
+                    return True
+                
+                # Strategy 1: PLAYWRIGHT click with WAIT (get CURRENT page!)
+                page = self._get_current_playwright_page()
+                if page:
+                    try:
+                        console.print("[dim]🎭 Strategy 1: Playwright with wait states...[/dim]")
+                        
+                        # Scroll with Playwright
+                        try:
+                            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                            time.sleep(0.8)
+                        except:
                             pass
                         
-                        time.sleep(1)
-                        
-                        # ULTRA-AGGRESSIVE Sign in button clicking (MUST WORK!)
-                        console.print("[bold cyan]Clicking Sign in button...[/bold cyan]")
-                        
-                        # STRATEGY 0: Wait for page to fully load AND prepare page
-                        try:
-                            console.print("[dim]⏳ Waiting for page to fully load...[/dim]")
+                        # Most specific selectors first (AWS SAML page)
+                        sign_in_selectors = [
+                            # AWS specific
+                            'button[type="submit"]:has-text("Sign in")',
+                            'button:has-text("Sign in"):visible',
+                            'input[type="submit"][value="Sign in"]',
                             
-                            # Wait for Sign in button to appear (up to 10 seconds)
-                            button_found = False
-                            for i in range(10):
-                                button_count = self.driver.execute_script("""
-                                    var buttons = document.querySelectorAll('button, input[type="submit"]');
-                                    return buttons.length;
-                                """)
-                                if button_count > 0:
-                                    console.print(f"[dim]   ✅ Found {button_count} buttons on page[/dim]")
-                                    button_found = True
-                                    break
-                                time.sleep(1)
+                            # Generic submit buttons
+                            'button[type="submit"]:visible',
+                            'input[type="submit"]:visible',
+                            'button:has-text("Sign"):visible',
                             
-                            if not button_found:
-                                console.print("[yellow]   ⚠️  No buttons found, but continuing anyway...[/yellow]")
-                            
-                            # Now prepare the page
-                            console.print("[dim]🧹 Preparing page (removing overlays, enabling buttons)...[/dim]")
-                            self.driver.execute_script("""
-                                // Remove ALL overlays and modals
-                                var overlays = document.querySelectorAll('[class*="overlay"], [class*="modal"], [class*="backdrop"]');
-                                overlays.forEach(el => el.remove());
-                                
-                                // Force enable ALL buttons
-                                var buttons = document.querySelectorAll('button, input[type="submit"]');
-                                console.log('Preparing', buttons.length, 'buttons');
-                                buttons.forEach(btn => {
-                                    btn.disabled = false;
-                                    btn.removeAttribute('disabled');
-                                    btn.style.pointerEvents = 'auto';
-                                    btn.style.opacity = '1';
-                                });
-                                
-                                // Scroll to bottom
-                                window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'});
-                                
-                                console.log('Page prepared for sign-in button click');
-                            """)
-                            time.sleep(2)  # Give time for scroll animation
-                        except Exception as e:
-                            console.print(f"[dim]   Page prep skipped: {str(e)[:40]}[/dim]")
-                        
-                        # Strategy 0.5: Directly submit the AWS SAML form before other fallbacks
-                        if self._force_saml_sign_in_direct():
-                            time.sleep(2)
-                            return True
-                        
-                        # Strategy 1: PLAYWRIGHT click with WAIT (get CURRENT page!)
-                        page = self._get_current_playwright_page()
-                        if page:
-                            try:
-                                console.print("[dim]🎭 Strategy 1: Playwright with wait states...[/dim]")
-                                
-                                # Scroll with Playwright
-                                try:
-                                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                                    time.sleep(0.8)
-                                except:
-                                    pass
-                                
-                                # Most specific selectors first (AWS SAML page)
-                                sign_in_selectors = [
-                                    # AWS specific
-                                    'button[type="submit"]:has-text("Sign in")',
-                                    'button:has-text("Sign in"):visible',
-                                    'input[type="submit"][value="Sign in"]',
-                                    
-                                    # Generic submit buttons
-                                    'button[type="submit"]:visible',
-                                    'input[type="submit"]:visible',
-                                    'button:has-text("Sign"):visible',
-                                    
-                                    # By ID/class
-                                    '#signin_button',
-                                    'button[id*="signin"]',
-                                    'button[name*="signin"]',
-                                    '.awsui-button-variant-primary:visible'
-                                ]
-                                
-                                for selector in sign_in_selectors:
-                                    try:
-                                        console.print(f"[dim]   Trying: {selector}[/dim]")
-                                        locator = page.locator(selector).first
-                                        
-                                        # Wait for it to be attached and visible
-                                        locator.wait_for(state="attached", timeout=3000)
-                                        
-                                        if locator.is_visible(timeout=2000):
-                                            # Scroll into view
-                                            locator.scroll_into_view_if_needed(timeout=2000)
-                                            time.sleep(0.3)
-                                            
-                                            # Click with force
-                                            console.print(f"[dim]   Clicking: {selector}[/dim]")
-                                            locator.click(timeout=5000, force=True, no_wait_after=False)
-                                            
-                                            console.print(f"[green]✅ SIGNED IN! (Playwright: {selector})[/green]")
-                                            time.sleep(3)
-                                            
-                                            # Verify navigation
-                                            final_url = page.url
-                                            if 'console.aws.amazon.com' in final_url:
-                                                console.print(f"[green]✅ Verified: Reached AWS Console![/green]")
-                                            return True
-                                    except Exception as e:
-                                        console.print(f"[dim]   {selector[:40]} → {str(e)[:40]}[/dim]")
-                                        continue
-                                
-                                console.print("[yellow]   Playwright: All selectors failed[/yellow]")
-                            except Exception as e:
-                                console.print(f"[yellow]   Playwright error: {str(e)[:60]}[/yellow]")
-                        else:
-                            console.print("[yellow]   Playwright: No active page available[/yellow]")
-                        
-                        # Strategy 2: AGGRESSIVE JavaScript (will find ANY button!)
-                        console.print("[dim]🔥 Strategy 2: Aggressive JavaScript...[/dim]")
-                        
-                        submit_result = self.driver.execute_script("""
-                            console.log('=== AGGRESSIVE JAVASCRIPT SIGN-IN FINDER ===');
-                            
-                            // Find ALL buttons
-                            var allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a[role="button"]');
-                            console.log('Total buttons found:', allButtons.length);
-                            
-                            // Try each button
-                            for (var i = 0; i < allButtons.length; i++) {
-                                var btn = allButtons[i];
-                                var text = (btn.textContent || btn.value || btn.innerText || '').toLowerCase().trim();
-                                var id = (btn.id || '').toLowerCase();
-                                var className = (btn.className || '').toLowerCase();
-                                
-                                console.log('Button', i, ':', text, 'id:', id, 'class:', className);
-                                
-                                // Check if it's a sign-in button
-                                if (text.includes('sign') || id.includes('sign') || className.includes('submit') || 
-                                    btn.type === 'submit' || text === 'sign in') {
-                                    
-                                    console.log('>>> FOUND SIGN-IN BUTTON:', text);
-                                    
-                                    // Force enable
-                                    btn.disabled = false;
-                                    btn.removeAttribute('disabled');
-                                    btn.style.pointerEvents = 'auto';
-                                    
-                                    // Scroll into view
-                                    btn.scrollIntoView({behavior: 'instant', block: 'center'});
-                                    
-                                    // Try multiple click strategies
-                                    try {
-                                        btn.click();
-                                        console.log('>>> SUCCESS: Direct click worked!');
-                                        return {success: true, method: 'direct_click', button: text};
-                                    } catch(e1) {
-                                        console.log('Direct click failed:', e1.message);
-                                    }
-                                    
-                                    try {
-                                        var evt = new MouseEvent('click', {bubbles: true, cancelable: true, view: window});
-                                        btn.dispatchEvent(evt);
-                                        console.log('>>> SUCCESS: MouseEvent worked!');
-                                        return {success: true, method: 'mouseevent', button: text};
-                                    } catch(e2) {
-                                        console.log('MouseEvent failed:', e2.message);
-                                    }
-                                    
-                                    try {
-                                        var form = btn.closest('form');
-                                        if (form) {
-                                            form.submit();
-                                            console.log('>>> SUCCESS: Form submit worked!');
-                                            return {success: true, method: 'form_submit', button: text};
-                                        }
-                                    } catch(e3) {
-                                        console.log('Form submit failed:', e3.message);
-                                    }
-                                }
-                            }
-                            
-                            console.log('ERROR: No sign-in button could be clicked');
-                            return {success: false, checked: allButtons.length};
-                        """)
-                        
-                        if submit_result and submit_result.get('success'):
-                            method = submit_result.get('method', 'unknown')
-                            console.print(f"[green]✅ Signed in (JavaScript {method})![/green]")
-                            time.sleep(3)
-                            return True
-                        else:
-                            checked = submit_result.get('checked', 0) if submit_result else 0
-                            console.print(f"[yellow]   JavaScript: Checked {checked} buttons, none worked[/yellow]")
-                        
-                        # Strategy 3: Selenium WebDriverWait
-                        console.print("[dim]🔧 Strategy 3: Selenium WebDriverWait...[/dim]")
-                        
-                        selectors = [
-                            (By.XPATH, "//button[contains(translate(text(), 'SIGN', 'sign'), 'sign')]"),
-                            (By.XPATH, "//input[@type='submit' and contains(@value, 'Sign')]"),
-                            (By.XPATH, "//button[@type='submit']"),
-                            (By.XPATH, "//input[@type='submit']"),
-                            (By.CSS_SELECTOR, "button[type='submit']"),
-                            (By.CSS_SELECTOR, "input[type='submit']"),
+                            # By ID/class
+                            '#signin_button',
+                            'button[id*="signin"]',
+                            'button[name*="signin"]',
+                            '.awsui-button-variant-primary:visible'
                         ]
                         
-                        for by, selector in selectors:
+                        for selector in sign_in_selectors:
                             try:
-                                submit_btn = WebDriverWait(self.driver, 2).until(
-                                    EC.element_to_be_clickable((by, selector))
-                                )
-                                # Scroll into view
-                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_btn)
-                                time.sleep(0.5)
-                                # Force click with JavaScript
-                                self.driver.execute_script("arguments[0].click();", submit_btn)
-                                console.print(f"[green]✅ Signed in (Selenium: {selector})![/green]")
-                                time.sleep(3)
-                                return True
-                            except:
+                                console.print(f"[dim]   Trying: {selector}[/dim]")
+                                locator = page.locator(selector).first
+                                
+                                # Wait for it to be attached and visible
+                                locator.wait_for(state="attached", timeout=3000)
+                                
+                                if locator.is_visible(timeout=2000):
+                                    # Scroll into view
+                                    locator.scroll_into_view_if_needed(timeout=2000)
+                                    time.sleep(0.3)
+                                    
+                                    # Click with force
+                                    console.print(f"[dim]   Clicking: {selector}[/dim]")
+                                    locator.click(timeout=5000, force=True, no_wait_after=False)
+                                    
+                                    console.print(f"[green]✅ SIGNED IN! (Playwright: {selector})[/green]")
+                                    time.sleep(3)
+                                    
+                                    # Verify navigation
+                                    final_url = page.url
+                                    if 'console.aws.amazon.com' in final_url:
+                                        console.print(f"[green]✅ Verified: Reached AWS Console![/green]")
+                                    return True
+                            except Exception as e:
+                                console.print(f"[dim]   {selector[:40]} → {str(e)[:40]}[/dim]")
                                 continue
                         
-                        console.print("[red]❌ ALL STRATEGIES FAILED! Could not click Sign in button[/red]")
-                        console.print("[yellow]⚠️  Please click Sign in button manually[/yellow]")
-                        return False
-                    else:
-                        # JavaScript failed - show available accounts
-                        console.print(f"[red]❌ Could not find role under account '{account_name}'[/red]")
-                        
-                        # First, try to show accounts from JavaScript result (more reliable)
-                        if result and result.get('availableAccounts'):
-                            console.print(f"[yellow]💡 Available accounts on this page:[/yellow]")
-                            for acc in result.get('availableAccounts', []):
-                                console.print(f"    - {acc}")
-                        else:
-                            # Fallback: Try to find accounts using Selenium
-                            console.print(f"[yellow]💡 Searching for available accounts...[/yellow]")
-                            try:
-                                accounts = self.driver.find_elements(By.XPATH, "//*[contains(text(), 'Account:')]")
-                                for acc in accounts[:10]:
-                                    acc_text = acc.text.strip()
-                                    if acc_text and len(acc_text) < 100:
-                                        console.print(f"    - {acc_text}")
-                            except:
-                                pass
-                        
-                        console.print(f"[yellow]⚠️  Please manually select the role and sign in[/yellow]")
-                        return False
+                        console.print("[yellow]   Playwright: All selectors failed[/yellow]")
+                    except Exception as e:
+                        console.print(f"[yellow]   Playwright error: {str(e)[:60]}[/yellow]")
+                else:
+                    console.print("[yellow]   Playwright: No active page available[/yellow]")
                 
-                # Strategy 2: Only if NO account name specified, try first available role
-                if not account_name:
-                    console.print(f"[dim]No account specified, trying first available role...[/dim]")
-                    try:
-                        first_radio = WebDriverWait(self.driver, 2).until(
-                            EC.element_to_be_clickable((By.XPATH, "//input[@type='radio'][@name='roleIndex']"))
-                        )
-                        first_radio.click()
-                        console.print(f"[green]✓ Selected first available role[/green]")
-                        time.sleep(1)
+                # Strategy 2: AGGRESSIVE JavaScript (will find ANY button!)
+                console.print("[dim]🔥 Strategy 2: Aggressive JavaScript...[/dim]")
+                
+                submit_result = self.driver.execute_script("""
+                    console.log('=== AGGRESSIVE JAVASCRIPT SIGN-IN FINDER ===');
+                    
+                    // Find ALL buttons
+                    var allButtons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a[role="button"]');
+                    console.log('Total buttons found:', allButtons.length);
+                    
+                    // Try each button
+                    for (var i = 0; i < allButtons.length; i++) {
+                        var btn = allButtons[i];
+                        var text = (btn.textContent || btn.value || btn.innerText || '').toLowerCase().trim();
+                        var id = (btn.id || '').toLowerCase();
+                        var className = (btn.className || '').toLowerCase();
                         
-                        # Click submit
-                        for submit_selector in ["//button[@type='submit']", "//input[@type='submit']", "//button[contains(text(), 'Sign in')]"]:
-                            try:
-                                submit_btn = WebDriverWait(self.driver, 2).until(
-                                    EC.element_to_be_clickable((By.XPATH, submit_selector))
-                                )
-                                submit_btn.click()
-                                console.print(f"[green]✓ Clicked Sign in button[/green]")
-                                return True
-                            except:
-                                continue
+                        console.log('Button', i, ':', text, 'id:', id, 'class:', className);
+                        
+                        // Check if it's a sign-in button
+                        if (text.includes('sign') || id.includes('sign') || className.includes('submit') || 
+                            btn.type === 'submit' || text === 'sign in') {
+                            
+                            console.log('>>> FOUND SIGN-IN BUTTON:', text);
+                            
+                            // Force enable
+                            btn.disabled = false;
+                            btn.removeAttribute('disabled');
+                            btn.style.pointerEvents = 'auto';
+                            
+                            // Scroll into view
+                            btn.scrollIntoView({behavior: 'instant', block: 'center'});
+                            
+                            // Try multiple click strategies
+                            try {
+                                btn.click();
+                                console.log('>>> SUCCESS: Direct click worked!');
+                                return {success: true, method: 'direct_click', button: text};
+                            } catch(e1) {
+                                console.log('Direct click failed:', e1.message);
+                            }
+                            
+                            try {
+                                var evt = new MouseEvent('click', {bubbles: true, cancelable: true, view: window});
+                                btn.dispatchEvent(evt);
+                                console.log('>>> SUCCESS: MouseEvent worked!');
+                                return {success: true, method: 'mouseevent', button: text};
+                            } catch(e2) {
+                                console.log('MouseEvent failed:', e2.message);
+                            }
+                            
+                            try {
+                                var form = btn.closest('form');
+                                if (form) {
+                                    form.submit();
+                                    console.log('>>> SUCCESS: Form submit worked!');
+                                    return {success: true, method: 'form_submit', button: text};
+                                }
+                            } catch(e3) {
+                                console.log('Form submit failed:', e3.message);
+                            }
+                        }
+                    }
+                    
+                    console.log('ERROR: No sign-in button could be clicked');
+                    return {success: false, checked: allButtons.length};
+                """)
+                
+                if submit_result and submit_result.get('success'):
+                    method = submit_result.get('method', 'unknown')
+                    console.print(f"[green]✅ Signed in (JavaScript {method})![/green]")
+                    time.sleep(3)
+                    return True
+                else:
+                    checked = submit_result.get('checked', 0) if submit_result else 0
+                    console.print(f"[yellow]   JavaScript: Checked {checked} buttons, none worked[/yellow]")
+                
+                # Strategy 3: Selenium WebDriverWait
+                console.print("[dim]🔧 Strategy 3: Selenium WebDriverWait...[/dim]")
+                
+                selectors = [
+                    (By.XPATH, "//button[contains(translate(text(), 'SIGN', 'sign'), 'sign')]"),
+                    (By.XPATH, "//input[@type='submit' and contains(@value, 'Sign')]"),
+                    (By.XPATH, "//button[@type='submit']"),
+                    (By.XPATH, "//input[@type='submit']"),
+                    (By.CSS_SELECTOR, "button[type='submit']"),
+                    (By.CSS_SELECTOR, "input[type='submit']"),
+                ]
+                
+                for by, selector in selectors:
+                    try:
+                        submit_btn = WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((by, selector))
+                        )
+                        # Scroll into view
+                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_btn)
+                        time.sleep(0.5)
+                        # Force click with JavaScript
+                        self.driver.execute_script("arguments[0].click();", submit_btn)
+                        console.print(f"[green]✅ Signed in (Selenium: {selector})![/green]")
+                        time.sleep(3)
                         return True
                     except:
-                        pass
+                        continue
                 
+                console.print("[red]❌ ALL STRATEGIES FAILED! Could not click Sign in button[/red]")
+                console.print("[yellow]⚠️  Please click Sign in button manually[/yellow]")
                 return False
             
             # If not SAML page, try original logic for portal-style pages
@@ -2013,18 +2057,34 @@ class UniversalScreenshotEnhanced:
             Path to saved screenshot or None if failed
         """
         try:
+            # Verify driver is still alive before attempting screenshot
+            if not self.driver:
+                console.print("[red]❌ Browser driver is None - cannot capture screenshot[/red]")
+                return None
+            
+            try:
+                # Quick health check
+                _ = self.driver.current_url
+            except Exception as health_err:
+                console.print(f"[red]❌ Browser window closed or crashed: {health_err}[/red]")
+                return None
+            
             # Wait for dynamic content
             time.sleep(wait_time)
             
-            # Scroll to load content
+            # Scroll to load content (with error handling for each scroll)
             if scroll_before:
                 console.print("[cyan]📜 Scrolling to load content...[/cyan]")
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
-                time.sleep(0.5)
-                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
-                time.sleep(0.5)
-                self.driver.execute_script("window.scrollTo(0, 0);")
-                time.sleep(0.5)
+                try:
+                    self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/3);")
+                    time.sleep(0.5)
+                    self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight/2);")
+                    time.sleep(0.5)
+                    self.driver.execute_script("window.scrollTo(0, 0);")
+                    time.sleep(0.5)
+                except Exception as scroll_err:
+                    console.print(f"[yellow]⚠️ Scroll failed (window may be closed): {scroll_err}[/yellow]")
+                    return None
             
             console.print("[cyan]📸 Capturing screenshot...[/cyan]")
 
