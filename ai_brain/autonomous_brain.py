@@ -21,6 +21,9 @@ from rich.markdown import Markdown
 
 from ai_brain.knowledge_manager import KnowledgeManager
 from ai_brain.web_search_tool import WebSearchTool
+from ai_brain.tool_generator import ToolGenerator
+from ai_brain.step_executor import StepExecutor
+from ai_brain.multi_agent_coordinator import MultiAgentCoordinator
 
 console = Console()
 
@@ -44,10 +47,16 @@ class AutonomousBrain:
         self.tool_executor = tool_executor
         self.knowledge = KnowledgeManager()
         self.web_search = WebSearchTool()
+        self.tool_generator = ToolGenerator(llm)
+        self.step_executor = StepExecutor(tool_executor, self.knowledge, self.web_search)
+        self.multi_agent = MultiAgentCoordinator(tool_executor, max_parallel=5)
         
         console.print("[bold magenta]🧠 Autonomous Brain Activated[/bold magenta]")
         console.print("[dim]   LLM-first architecture enabled[/dim]")
-        console.print("[dim]   Real-time knowledge retrieval ready[/dim]\n")
+        console.print("[dim]   Real-time knowledge retrieval ready[/dim]")
+        console.print("[dim]   Tool generation: ENABLED[/dim]")
+        console.print("[dim]   Step-by-step execution: ENABLED[/dim]")
+        console.print("[dim]   Multi-agent coordination: ENABLED[/dim]\n")
     
     def process_request(self, user_request: str, conversation_history: List[Dict]) -> Dict[str, Any]:
         """
@@ -317,15 +326,16 @@ Focus on extracting ALL details from the request."""
         console.print(f"\n[bold cyan]🔧 TOOL RESOLUTION[/bold cyan]")
         
         plan = enriched_plan.copy()
-        actions = plan.get("actions", [])
         
-        # For now, assume we have tools (tool generation is Phase 4)
-        # We'll enhance this later to actually generate missing tools
+        # Check if we need to generate any tools
+        # For now, assume tools exist (generation triggers on actual missing tool errors)
+        # Future: Proactively detect missing capabilities and generate before execution
         
         plan["tools_ready"] = True
         plan["missing_tools"] = []
+        plan["generated_tools"] = []
         
-        console.print("[green]✅ All required tools available[/green]")
+        console.print("[green]✅ Tool resolution complete[/green]")
         
         return plan
     
@@ -358,16 +368,46 @@ Focus on extracting ALL details from the request."""
                 "delegate_to_claude": True
             }
         
-        # Otherwise, let Claude execute based on enriched context
-        # The knowledge and web search results are now available to Claude
-        console.print("[green]Knowledge-enriched execution proceeding...[/green]")
+        # Check if this can be parallelized
+        steps = plan.get("steps", [])
         
-        return {
-            "success": True,
-            "response": "fallback_to_claude",
-            "delegate_to_claude": True,
-            "enriched_context": plan.get("knowledge", {})
-        }
+        if self.multi_agent.can_parallelize(plan) and len(steps) > 1:
+            console.print(f"[magenta]🤖 Task can be parallelized - spawning {len(steps)} sub-agents[/magenta]")
+            
+            # Execute in parallel
+            result = self.multi_agent.execute_parallel(steps)
+            
+            return {
+                "success": result.get("success"),
+                "response": f"Completed {result.get('successful')}/{result.get('total_agents')} parallel tasks",
+                "delegate_to_claude": False,
+                "execution_result": result
+            }
+        
+        # Check if we have explicit steps to execute
+        elif steps and len(steps) > 0:
+            console.print(f"[cyan]Executing {len(steps)} steps sequentially...[/cyan]")
+            
+            # Execute step-by-step
+            result = self.step_executor.execute_plan(plan)
+            
+            return {
+                "success": result.get("success"),
+                "response": f"Completed {result.get('steps_completed')} steps",
+                "delegate_to_claude": False,
+                "execution_result": result
+            }
+        
+        else:
+            # No explicit steps, delegate to Claude with enriched context
+            console.print("[green]Delegating to Claude with enriched knowledge...[/green]")
+            
+            return {
+                "success": True,
+                "response": "fallback_to_claude",
+                "delegate_to_claude": True,
+                "enriched_context": plan.get("knowledge", {})
+            }
     
     def _learn_from_execution(
         self,
