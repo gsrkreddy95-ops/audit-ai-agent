@@ -167,18 +167,18 @@ class EvidenceValidator:
         
         # Check 2: Image is valid
         try:
-            img = Image.open(screenshot_path)
-            width, height = img.size
-            
-            if width < 100 or height < 100:
-                validation_result["issues"].append(f"Image too small ({width}x{height})")
-                validation_result["diagnosis"] = "Screenshot appears to be blank or corrupt"
-                validation_result["suggested_fix"] = "Re-capture screenshot with longer wait time for page load"
-                console.print(f"[red]❌ Image too small: {width}x{height}[/red]")
-                return validation_result
-            
-            validation_result["checks"]["image_valid"] = True
-            console.print(f"[green]✅ Image valid: {width}x{height} pixels[/green]")
+            with Image.open(screenshot_path) as img:
+                width, height = img.size
+                
+                if width < 100 or height < 100:
+                    validation_result["issues"].append(f"Image too small ({width}x{height})")
+                    validation_result["diagnosis"] = "Screenshot appears to be blank or corrupt"
+                    validation_result["suggested_fix"] = "Re-capture screenshot with longer wait time for page load"
+                    console.print(f"[red]❌ Image too small: {width}x{height}[/red]")
+                    return validation_result
+                
+                validation_result["checks"]["image_valid"] = True
+                console.print(f"[green]✅ Image valid: {width}x{height} pixels[/green]")
             
         except Exception as e:
             validation_result["issues"].append(f"Image corrupt: {e}")

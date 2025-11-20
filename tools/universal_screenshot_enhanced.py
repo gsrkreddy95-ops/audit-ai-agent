@@ -2144,7 +2144,7 @@ class UniversalScreenshotEnhanced:
                 img = self._add_timestamp(img, name)
             
             # Save
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"evidence_{name}_{timestamp}.png"
             
             # Create screenshots directory
@@ -2171,7 +2171,7 @@ class UniversalScreenshotEnhanced:
         """
         try:
             draw = ImageDraw.Draw(img)
-            utc_now = datetime.utcnow().replace(tzinfo=timezone.utc)
+            utc_now = datetime.now(timezone.utc)
             timestamp = utc_now.strftime("%Y-%m-%dT%H:%M:%SZ")
             base_label = label if label else "EVIDENCE"
             text = f"{base_label} | {timestamp}"[:120]
