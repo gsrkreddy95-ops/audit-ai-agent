@@ -181,7 +181,12 @@ class WebSearchTool:
     def _search_duckduckgo(self, query: str, max_results: int) -> Dict[str, Any]:
         """Fallback search using DuckDuckGo (no API key required)"""
         try:
-            from duckduckgo_search import DDGS
+            # Try new package name first (ddgs)
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                # Fallback to old package name for compatibility
+                from duckduckgo_search import DDGS
             
             ddgs = DDGS()
             results = []
@@ -210,10 +215,11 @@ class WebSearchTool:
                 "backend": "duckduckgo"
             }
         except ImportError:
-            console.print("[yellow]⚠️  DuckDuckGo search requires: pip install duckduckgo-search[/yellow]")
+            console.print("[yellow]⚠️  DuckDuckGo search requires: pip install ddgs[/yellow]")
+            console.print("[dim]   (or pip install duckduckgo-search for legacy support)[/dim]")
             return {
                 "success": False,
-                "error": "duckduckgo-search not installed",
+                "error": "ddgs package not installed",
                 "query": query,
                 "results": [],
                 "sources": []
