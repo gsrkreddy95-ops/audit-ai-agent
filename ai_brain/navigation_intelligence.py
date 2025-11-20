@@ -40,47 +40,39 @@ class NavigationIntelligence:
         """
         return self.learned_paths.get(service, {}).get(resource_type)
     
-    def learn_navigation_path(self, **kwargs) -> Dict[str, Any]:
+    def learn_navigation_path(self, service=None, resource_type=None, url=None, **kwargs):
         """
-        Store/retrieve a successful navigation path.
+        Store/retrieve navigation path with flexible signature.
         
-        Flexible signature to handle various call patterns.
+        Supports both:
+        - learn_navigation_path(service, resource_type, url)
+        - learn_navigation_path(platform="aws", service="iam", target="identity_provider", ...)
         
-        Args (via kwargs):
-            service: Service name
-            target or resource_type: Resource type
-            url or current_url: URL
-            platform: Platform (aws, etc.)
-            user_request: Original request
-            
         Returns:
-            Navigation instructions or learned URL
+            Learned URL if available, or instructions dict
         """
-        service = kwargs.get('service', '')
-        target = kwargs.get('target') or kwargs.get('resource_type', '')
-        url = kwargs.get('url') or kwargs.get('current_url', '')
+        # Extract from kwargs if not provided as positional
+        service = service or kwargs.get('service')
+        resource_type = resource_type or kwargs.get('resource_type') or kwargs.get('target')
+        url = url or kwargs.get('url') or kwargs.get('current_url')
         
-        if not service or not target:
-            # If called without proper args, return learned path
-            return self.get_learned_navigation(service, target) or {}
+        # If being called to GET learned path (no url provided)
+        if service and resource_type and not url:
+            learned_url = self.get_learned_navigation(service, resource_type)
+            if learned_url:
+                return {"url": learned_url, "learned": True}
+            return None
         
-        # Store the path if URL provided
-        if url and service and target:
+        # If being called to STORE a path
+        if service and resource_type and url:
             if service not in self.learned_paths:
                 self.learned_paths[service] = {}
             
-            self.learned_paths[service][target] = url
-            console.print(f"[dim]📍 Learned navigation: {service}/{target}[/dim]")
+            self.learned_paths[service][resource_type] = url
+            console.print(f"[dim]📍 Learned navigation: {service}/{resource_type}[/dim]")
+            return {"success": True}
         
-        # Return learned or constructed navigation
-        learned_url = self.get_learned_navigation(service, target)
-        
-        return {
-            "url": learned_url,
-            "method": "learned" if learned_url else "construct",
-            "service": service,
-            "target": target
-        }
+        return None
     
     def get_navigation_strategy(
         self,
