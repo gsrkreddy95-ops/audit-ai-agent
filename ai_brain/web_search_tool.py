@@ -221,23 +221,23 @@ class WebSearchTool:
                     "backend": "duckduckgo"
                 }
             except ImportError:
-            console.print("[yellow]⚠️  DuckDuckGo search requires: pip install ddgs[/yellow]")
-            console.print("[dim]   (or pip install duckduckgo-search for legacy support)[/dim]")
-            return {
-                "success": False,
-                "error": "ddgs package not installed",
-                "query": query,
-                "results": [],
-                "sources": []
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "query": query,
-                "results": [],
-                "sources": []
-            }
+                console.print("[yellow]⚠️  DuckDuckGo search requires: pip install ddgs[/yellow]")
+                console.print("[dim]   (or pip install duckduckgo-search for legacy support)[/dim]")
+                return {
+                    "success": False,
+                    "error": "ddgs package not installed",
+                    "query": query,
+                    "results": [],
+                    "sources": []
+                }
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "query": query,
+                    "results": [],
+                    "sources": []
+                }
     
     def quick_lookup(self, query: str) -> str:
         """
