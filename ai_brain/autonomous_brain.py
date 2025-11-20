@@ -84,8 +84,8 @@ class AutonomousBrain:
             console.print(f"[yellow]⚠️  Analysis issue, delegating to Claude...[/yellow]")
             return {"delegate_to_claude": True}
         
-        # Phase 2: Knowledge Lookup & Web Search (only for critical questions)
-        enriched_plan = self._enrich_with_knowledge(analysis)
+        # Phase 2: Knowledge Lookup & Web Search (proactive for all questions)
+        enriched_plan = self._enrich_with_knowledge(analysis, user_request)
         
         # Phase 3: Tool Resolution
         execution_ready = self._resolve_tools(enriched_plan)
@@ -210,43 +210,73 @@ Focus on extracting ALL details from the request."""
                 "fallback": True
             }
     
-    def _enrich_with_knowledge(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+    def _enrich_with_knowledge(self, analysis: Dict[str, Any], user_request: str = "") -> Dict[str, Any]:
         """
         Phase 2: Answer questions using knowledge base + web search.
         
+        Enhanced to be more proactive with web search for general questions.
+        
         For each question in the analysis:
         1. Check knowledge base first
-        2. If unknown AND critical, search the web
+        2. If unknown OR needs current info, search the web
         3. Learn and store the answer
+        
+        Args:
+            analysis: Analysis result from Phase 1
+            user_request: Original user request (for context)
         
         Returns:
             Enriched analysis with answers
         """
         questions = analysis.get("questions", [])
         
-        # Skip enrichment if no critical questions (avoid unnecessary web searches)
+        # Check if this is a general question (not an action request)
+        is_general_question = any(keyword in user_request.lower() for keyword in [
+            "what is", "what are", "how does", "why", "explain", "tell me about",
+            "difference", "compare", "best practice", "recommended"
+        ])
+        
+        # Skip enrichment if no questions
         if not questions or len(questions) == 0:
-            console.print(f"\n[dim]🔍 No knowledge gaps detected, proceeding...[/dim]")
-            analysis["knowledge"] = {}
-            return analysis
+            # But if it's a general question, search directly
+            if is_general_question:
+                console.print(f"\n[bold cyan]🔍 General question detected - searching web...[/bold cyan]")
+                search_result = self.web_search.search(user_request, max_results=5)
+                if search_result.get("success"):
+                    analysis["knowledge"] = {
+                        "direct_answer": search_result.get("answer", ""),
+                        "sources": search_result.get("sources", [])
+                    }
+                    return analysis
+            else:
+                console.print(f"\n[dim]🔍 No knowledge gaps detected, proceeding...[/dim]")
+                analysis["knowledge"] = {}
+                return analysis
         
         answers = {}
         console.print(f"\n[bold cyan]🔍 KNOWLEDGE ENRICHMENT ({len(questions)} questions)[/bold cyan]")
         
-        # Limit web searches to avoid spam (only search critical technical questions)
-        critical_keywords = ["regional", "global", "field", "endpoint", "api", "default"]
+        # More aggressive web search for general questions
+        if is_general_question:
+            # Search for all questions, not just technical ones
+            search_all = True
+        else:
+            # For action requests, only search critical technical questions
+            critical_keywords = ["regional", "global", "field", "endpoint", "api", "default", "current", "latest"]
+            search_all = False
         
-        for question in questions[:3]:  # Limit to first 3 questions
+        for question in questions[:5]:  # Increased limit for general questions
             # Skip clarifying questions (those are for user, not web)
             question_lower = question.lower()
             if any(word in question_lower for word in ["should be", "user wants", "looking for", "specific"]):
                 console.print(f"[dim]Skipping clarifying question: {question}[/dim]")
                 continue
             
-            # Only search if it's a technical question
-            if not any(keyword in question_lower for keyword in critical_keywords):
-                console.print(f"[dim]Skipping non-technical question: {question}[/dim]")
-                continue
+            # For action requests, only search technical questions
+            if not search_all:
+                if not any(keyword in question_lower for keyword in critical_keywords):
+                    console.print(f"[dim]Skipping non-technical question: {question}[/dim]")
+                    continue
             
             console.print(f"[cyan]Q: {question}[/cyan]")
             

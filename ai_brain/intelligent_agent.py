@@ -69,6 +69,14 @@ class IntelligentAgent:
             self.autonomous_brain = None
             console.print("[yellow]🧠 Autonomous Brain Mode: DISABLED (using legacy flow)[/yellow]")
         
+        # Initialize Conversational Agent for general Q&A
+        from ai_brain.conversational_agent import ConversationalAgent
+        from ai_brain.knowledge_manager import KnowledgeManager
+        knowledge_manager = KnowledgeManager()
+        self.conversational_agent = ConversationalAgent(self.llm, knowledge_manager)
+        console.print("[bold cyan]💬 Conversational Agent: ENABLED[/bold cyan]")
+        console.print("[dim]   General Q&A with real-time knowledge: READY[/dim]")
+        
         console.print(f"[green]✅ Ready![/green]")
         console.print(f"[dim]Evidence: {self.evidence_manager.evidence_dir}[/dim]")
         console.print(f"[dim]Tools: {len(self.tools)} available[/dim]\n")
@@ -102,7 +110,22 @@ class IntelligentAgent:
             if hasattr(self, "tool_executor") and self.tool_executor:
                 self.tool_executor.set_current_request(user_input)
             
-            # Route through Autonomous Brain if enabled
+            # Step 1: Check if this is a general question (answer directly)
+            if hasattr(self, 'conversational_agent') and self.conversational_agent:
+                conversational_result = self.conversational_agent.process_conversational(
+                    user_input, self.conversation_history
+                )
+                
+                if conversational_result and conversational_result.get("type") == "answer":
+                    # This is a general question - answer it directly
+                    response = conversational_result.get("response", "")
+                    if conversational_result.get("sources"):
+                        sources = conversational_result.get("sources", [])
+                        if sources:
+                            response += f"\n\n📚 Sources: {', '.join(sources[:3])}"
+                    return response
+            
+            # Step 2: Route through Autonomous Brain if enabled (for action requests)
             if hasattr(self, 'autonomous_brain') and self.autonomous_brain:
                 # Use autonomous brain for analysis + planning
                 # Brain will search web, plan, and orchestrate execution
@@ -419,10 +442,24 @@ You are a **sophisticated, intelligent, and naturally conversational AI assistan
 - **Be engaging** - Use natural language, vary your sentence structure, be personable
 - **Be intelligent** - Show reasoning, explain your thinking, connect concepts
 - **Be conversational** - It's okay to be friendly, use examples, ask clarifying questions
+- **Answer general questions directly** - Use your knowledge + web_search tool for real-time data
 
 **How to Communicate:**
 
-1. **For Questions & Explanations** (No Tools Needed):
+1. **For General Questions** (Answer Directly):
+   - **Answer naturally** - Like ChatGPT/Gemini, provide comprehensive answers
+   - **Use web_search tool** - For current information, latest updates, best practices
+   - **Combine knowledge** - Use your built-in knowledge + web search results
+   - **Be conversational** - Explain concepts clearly, provide examples
+   - **Cite sources** - When using web_search, mention sources
+   
+   Examples:
+   - "What is AWS S3?" → Answer directly with your knowledge
+   - "What are the latest AWS security best practices?" → Use web_search, then synthesize answer
+   - "How does KMS key rotation work?" → Explain using knowledge + search if needed
+   - "What's the difference between S3 and EBS?" → Compare and explain clearly
+
+2. **For Questions & Explanations** (No Tools Needed):
    - Answer naturally, like you're talking to a colleague
    - Provide context and examples
    - Structure information clearly (use bullet points, numbered lists when helpful)
@@ -560,6 +597,38 @@ Just Talk When:
 - User wants to understand something
 - User is exploring your capabilities
 - User asks for advice or recommendations
+
+**🌐 REAL-TIME KNOWLEDGE & WEB SEARCH:**
+
+You have access to `web_search` tool for real-time information. Use it proactively:
+
+**When to Use web_search:**
+- Questions about current/latest information ("latest", "current", "2025", "now", "today")
+- Best practices and recommendations ("best practice", "recommended", "should I")
+- Technical documentation lookups ("AWS S3 API", "Jira REST API")
+- Error troubleshooting ("how to fix X error")
+- Comparisons and explanations ("difference between X and Y")
+- Any question where real-time data would improve your answer
+
+**How to Use web_search:**
+1. For general questions, use web_search FIRST to get current information
+2. Synthesize web results with your knowledge
+3. Provide comprehensive answer with sources cited
+4. Example: "What are AWS security best practices in 2025?" → web_search → synthesize → answer
+
+**Example Flow:**
+User: "What are the latest AWS security best practices?"
+
+You:
+1. Use web_search("AWS security best practices 2025")
+2. Get current recommendations from AWS docs
+3. Synthesize with your knowledge
+4. Provide comprehensive answer with sources
+
+**Be Proactive:**
+- Don't wait for user to ask "search the web"
+- If question involves current info, automatically use web_search
+- Combine web results with your knowledge for best answers
 - User wants clarification
 - General conversation or questions
 
