@@ -694,9 +694,9 @@ class ToolExecutor:
                 else:
                     console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
             
-            # Get current URL from browser
-            browser = BrowserSessionManager.get_browser()
-            current_url = browser.driver.current_url if browser else "Unknown"
+            # Get current URL from browser (account-specific)
+            browser = BrowserSessionManager.get_browser(account=account)
+            current_url = browser.driver.current_url if browser and browser.driver else "Unknown"
             
             # Now decide what action to take
             if export_format:
