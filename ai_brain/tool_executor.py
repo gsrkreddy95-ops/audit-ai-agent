@@ -25,6 +25,7 @@ from evidence_manager.playbook_replayer import EvidencePlaybookReplayer
 from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced, ClickStrategy
 from tools.rds_navigator_enhanced import RDSNavigatorEnhanced
 from ai_brain.browser_session_manager import BrowserSessionManager  # ← ADDED FOR aws_console_action
+from ai_brain.parallel_executor import ParallelExecutor  # ← ADDED FOR PARALLEL EXECUTION
 from tools.aws_universal_export import (
     export_aws_data,  # Universal export (auto-detects best tool)
     export_all_aws_services  # Export ALL 100+ services
@@ -86,6 +87,7 @@ class ToolExecutor:
             ToolExecutor.DEFAULT_REGIONS = catalog_regions
         self.error_debugger = ErrorDebugger(llm)
         self.enhancement_reviewer = None
+        self.parallel_executor = ParallelExecutor(max_workers=3)  # Max 3 parallel browser sessions
         self.navigation_intelligence = get_navigation_intelligence(llm)
         self.execution_intelligence = get_execution_intelligence(llm)
         self.navigation_intelligence = get_navigation_intelligence(llm)
@@ -173,7 +175,7 @@ class ToolExecutor:
         if isinstance(result, dict):
             self._notify_advisor_of_step(tool_name, tool_input, result)
             if self.error_debugger:
-                self.error_debugger.analyze(tool_name, tool_input, result)
+                self.error_debugger.analyze(tool_name=tool_name, tool_input=tool_input, result=result)
         return result
     
     def _execute_tool_direct(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -505,21 +507,77 @@ class ToolExecutor:
         2. Navigation + Screenshot (capture_screenshot=true)
         3. Navigation + Export (export_format set)
         Supports batching across multiple regions/tabs in one call.
+        NOW SUPPORTS PARALLEL EXECUTION for multi-account requests!
         """
+        account_param = params.get("aws_account")
         region_param = params.get("aws_region")
         tab_param = params.get("config_tab")
+        
+        # Parse accounts
+        if isinstance(account_param, str):
+            accounts = [a.strip() for a in account_param.replace(',', ' ').split() if a.strip()]
+        elif isinstance(account_param, (list, tuple)):
+            accounts = [str(a).strip() for a in account_param if a]
+        else:
+            accounts = [account_param] if account_param else []
+        
+        # Parse regions
         region_list = (
             [r.strip() for r in region_param if isinstance(r, str)]
             if isinstance(region_param, (list, tuple, set))
-            else [region_param]
+            else [region_param] if region_param else []
         )
+        
+        # Parse tabs
         tab_list = (
             [t for t in tab_param if t]
             if isinstance(tab_param, (list, tuple, set))
             else ([tab_param] if tab_param else [None])
         )
         
-        # If multiple regions or tabs requested, run sequentially
+        # Detect multi-account/region request
+        is_multi_account = len(accounts) > 1
+        is_multi_region = len(region_list) > 1
+        is_multi_tab = len(tab_list) > 1
+        
+        # If multiple accounts detected, use parallel execution
+        if is_multi_account or (is_multi_region and len(accounts) > 0):
+            console.print(f"\n[bold cyan]🚀 Multi-account/region detected: {len(accounts)} accounts × {len(region_list)} regions[/bold cyan]")
+            
+            # Generate all account-region combinations
+            combinations = []
+            for account in accounts:
+                for region in region_list:
+                    for tab in tab_list:
+                        sub_params = dict(params)
+                        sub_params["aws_account"] = account
+                        sub_params["aws_region"] = region
+                        if tab:
+                            sub_params["config_tab"] = tab
+                        else:
+                            sub_params.pop("config_tab", None)
+                        combinations.append(sub_params)
+            
+            # Execute in parallel
+            parallel_result = self.parallel_executor.execute_parallel(
+                execute_func=self._aws_console_action_single,
+                params_list=combinations,
+                task_name="AWS console action"
+            )
+            
+            # Format response
+            return {
+                "status": parallel_result["status"],
+                "result": {
+                    "runs": parallel_result["results"],
+                    "failures": parallel_result["failures"],
+                    "total": parallel_result["total"],
+                    "successful": parallel_result["successful"],
+                    "failed": parallel_result["failed"]
+                }
+            }
+        
+        # Single account but multiple regions/tabs - run sequentially (legacy behavior)
         if len(region_list) > 1 or len(tab_list) > 1:
             multi_results = []
             failures = []
@@ -546,6 +604,7 @@ class ToolExecutor:
                 }
             }
         
+        # Single account, single region - execute directly
         return self._aws_console_action_single(params)
     
     def _aws_console_action_single(self, params: Dict) -> Dict:
@@ -574,6 +633,14 @@ class ToolExecutor:
             console.print(f"   Section: {section_name}")
         
         try:
+            # Get account-specific browser session (enables parallel execution)
+            browser = BrowserSessionManager.get_browser(account=account)
+            if not browser:
+                return {
+                    "status": "error",
+                    "error": f"Failed to initialize browser session for {account}"
+                }
+            
             # Authenticate to AWS account using BrowserSessionManager
             # Note: authenticate_aws takes region as second parameter
             if not BrowserSessionManager.authenticate_aws(account, region, role_name=role_name):
@@ -590,8 +657,8 @@ class ToolExecutor:
                 if not BrowserSessionManager.change_region(region):
                     console.print(f"[yellow]⚠️  Region switch may have failed, continuing...[/yellow]")
             
-            # Get universal navigator
-            universal_nav = BrowserSessionManager.get_universal_navigator()
+            # Get universal navigator (account-specific)
+            universal_nav = BrowserSessionManager.get_universal_navigator(account=account)
             if not universal_nav:
                 return {
                     "status": "error",

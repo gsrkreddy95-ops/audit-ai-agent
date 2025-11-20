@@ -29,13 +29,14 @@ class ErrorDebugger:
         self.llm = llm
         self.enabled = llm is not None
     
-    def analyze(self, error: Exception, context: Dict[str, Any]) -> Dict[str, Any]:
+    def analyze(self, error: Exception = None, context: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:
         """
-        Analyze an error using LLM.
+        Analyze an error or execution result using LLM.
         
         Args:
-            error: The exception
-            context: Execution context
+            error: The exception (optional)
+            context: Execution context (optional)
+            **kwargs: Flexible arguments (tool_name, tool_input, result, etc.)
             
         Returns:
             Debug analysis with fixes
@@ -43,7 +44,33 @@ class ErrorDebugger:
         if not self.enabled:
             return {"analysis": "LLM not available", "suggestions": []}
         
-        error_trace = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
+        # Handle flexible call patterns
+        if error is None and context is None:
+            # Called with kwargs (e.g., tool_name, tool_input, result)
+            tool_name = kwargs.get('tool_name', 'unknown')
+            tool_input = kwargs.get('tool_input', {})
+            result = kwargs.get('result', {})
+            
+            # Only analyze if there's an error in the result
+            if isinstance(result, dict) and result.get('status') == 'error':
+                error_msg = result.get('error', 'Unknown error')
+                error = Exception(error_msg)
+                context = {
+                    "tool_name": tool_name,
+                    "tool_input": tool_input,
+                    "result": result
+                }
+            else:
+                # No error to analyze
+                return {"analysis": "No error detected", "suggestions": []}
+        
+        if error is None:
+            return {"analysis": "No error provided", "suggestions": []}
+        
+        if context is None:
+            context = kwargs or {}
+        
+        error_trace = ''.join(traceback.format_exception(type(error), error, error.__traceback__)) if error.__traceback__ else str(error)
         
         prompt = f"""Debug this error:
 

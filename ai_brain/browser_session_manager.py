@@ -289,16 +289,19 @@ class BrowserSessionManager:
             return False
     
     @classmethod
-    def get_universal_navigator(cls):
+    def get_universal_navigator(cls, account: Optional[str] = None):
         """
         Get universal AWS service navigator.
         
         This navigator supports ALL AWS services with human-like behavior!
         
+        Args:
+            account: AWS account name (e.g., 'ctr-prod'). None = use primary session.
+        
         Returns:
             AWSUniversalServiceNavigator instance
         """
-        browser = cls.get_browser()
+        browser = cls.get_browser(account=account)
         if not browser:
             return None
         
