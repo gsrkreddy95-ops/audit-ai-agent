@@ -59,7 +59,7 @@ def execute_python_code(code: str, description: str = "", timeout: int = 300,
         # Create a temporary file for the code
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
             # Add imports that are commonly needed
-            full_code = """
+            imports = """
 import os
 import sys
 import json
@@ -71,14 +71,23 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, '/Users/krishna/Documents/audit-ai-agent')
 
-# Result variable to capture return value
-__result__ = None
-
-""" + code
+"""
             
-            # If code doesn't have explicit print/return, wrap it to capture result
-            if 'return' not in code and '__result__' not in code:
-                full_code += "\n\n# Capture last expression\nimport sys\n"
+            # Check if code has 'return' statement (which would be a syntax error at top level)
+            if 'return ' in code or 'return{' in code:
+                # Wrap code in a main function to handle return statements
+                full_code = imports + """
+def __main__():
+""" + "\n".join("    " + line for line in code.split("\n")) + """
+
+# Execute main function and print result
+__result__ = __main__()
+if __result__ is not None:
+    print(__result__)
+"""
+            else:
+                # Code doesn't have return, execute directly
+                full_code = imports + code
             
             f.write(full_code)
             temp_file = f.name
