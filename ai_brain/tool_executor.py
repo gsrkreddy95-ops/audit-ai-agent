@@ -32,7 +32,7 @@ from tools.aws_universal_export import (
 from tools.aws_list_tool import (
     list_s3_buckets, list_rds_instances, list_rds_clusters,
     list_iam_users, list_ec2_instances, list_lambda_functions,
-    list_kms_keys, list_vpc_resources
+    list_vpc_resources
 )
 from tools.sharepoint_upload_tool import upload_to_sharepoint, batch_upload_from_rfi_folder
 from ai_brain.universal_intelligence import UniversalIntelligence
