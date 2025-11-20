@@ -856,33 +856,40 @@ class AWSUniversalServiceNavigator:
     def _navigate_via_search(self, service_name: str, service_key: Optional[str] = None) -> bool:
         """
         UNIVERSAL AWS Console Search - Works for ANY service!
-        Uses AWS Console's built-in search (most reliable method)
+        Uses AWS Console's built-in search (PRIMARY navigation method)
+        
+        This is THE BEST way to navigate because:
+        - Works for ALL 407 AWS services automatically
+        - Future-proof (no URL mapping maintenance)
+        - Adapts to AWS console changes
+        - Uses AWS's own intelligent search
         """
         try:
-            console.print(f"[cyan]🔍 Universal AWS search for '{service_name}'...[/cyan]")
+            console.print(f"[bold cyan]🔍 AWS Search: '{service_name}'...[/bold cyan]")
 
             result = self.driver.execute_script("""
                 var serviceName = arguments[0];
-                console.log('=== Universal AWS Console Search ===');
-                console.log('Searching for:', serviceName);
+                console.log('=== ENHANCED AWS Console Search ===');
+                console.log('Service:', serviceName);
                 
-                // STEP 1: Find and click search button (multiple selectors for robustness)
+                // STEP 1: Find and click search button
                 var searchButton = document.querySelector('[data-testid="awsc-nav-search-button"]') ||
                                  document.querySelector('[aria-label="Search"]') ||
                                  document.querySelector('button[aria-label*="Search"]') ||
                                  document.querySelector('#awsc-nav-search-button') ||
                                  document.querySelector('[data-testid="awsc-header-search-button"]') ||
-                                 document.querySelector('button[class*="search"]');
+                                 document.querySelector('button[class*="search"]') ||
+                                 document.querySelector('[id*="search"][role="button"]');
                 
                 if (!searchButton) {
-                    console.log('ERROR: Search button not found');
+                    console.log('❌ Search button not found');
                     return {success: false, error: 'Search button not found'};
                 }
                 
                 searchButton.click();
-                console.log('✅ Clicked search button');
+                console.log('✅ Opened search');
                 
-                // STEP 2: Wait for search input and type
+                // STEP 2: Wait for search input to appear and type
                 setTimeout(function() {
                     var searchInput = document.querySelector('input[type="search"]') ||
                                     document.querySelector('[data-testid="search-input"]') ||
@@ -890,112 +897,157 @@ class AWSUniversalServiceNavigator:
                                     document.querySelector('input[placeholder*="Search"]') ||
                                     document.querySelector('input[placeholder*="search"]') ||
                                     document.querySelector('#awsc-nav-search-field') ||
-                                    document.querySelector('input[aria-label*="Search"]');
+                                    document.querySelector('input[aria-label*="Search"]') ||
+                                    document.querySelector('input[aria-label*="search"]');
                     
                     if (!searchInput) {
-                        console.log('ERROR: Search input not found');
+                        console.log('❌ Search input not found');
                         return;
                     }
                     
-                    console.log('✅ Found search input, typing:', serviceName);
+                    console.log('✅ Typing:', serviceName);
                     searchInput.focus();
                     searchInput.value = serviceName;
                     
-                    // Trigger all possible events for search
+                    // Trigger search events
                     searchInput.dispatchEvent(new Event('input', { bubbles: true }));
                     searchInput.dispatchEvent(new Event('change', { bubbles: true }));
                     searchInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
                     searchInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter' }));
                     
-                    console.log('✅ Search query sent');
+                    console.log('✅ Search submitted');
                     
-                    // STEP 3: Wait for results and click first service result
+                    // STEP 3: Wait longer for results to load
                     setTimeout(function() {
-                        console.log('Looking for search results...');
+                        console.log('📊 Analyzing search results...');
                         
-                        // Try multiple result selectors (AWS changes UI frequently)
-                        var results = document.querySelectorAll('[data-testid="search-result"]') ||
-                                    document.querySelectorAll('[data-testid="awsc-nav-service-menu-item"]') ||
-                                    document.querySelectorAll('a[href*="console.aws"]') ||
-                                    document.querySelectorAll('.awsui-table-row a') ||
-                                    document.querySelectorAll('[class*="search-result"]') ||
-                                    document.querySelectorAll('[role="option"]') ||
-                                    document.querySelectorAll('li[role="option"] a');
+                        // Cast wider net for results (AWS UI changes frequently)
+                        var allLinks = document.querySelectorAll('a[href*="console.aws"]');
+                        console.log('Found', allLinks.length, 'AWS console links');
                         
-                        console.log('Found', results.length, 'search results');
+                        var serviceNameLower = serviceName.toLowerCase().replace(/\\s+/g, '');
+                        var serviceWords = serviceName.toLowerCase().split(/[\\s-]+/);
+                        var bestMatch = null;
+                        var bestScore = 0;
                         
-                        if (results.length > 0) {
-                            // Filter results to prefer exact service matches
-                            var serviceNameLower = serviceName.toLowerCase();
-                            var bestResult = null;
+                        // Score each result
+                        for (var i = 0; i < allLinks.length; i++) {
+                            var link = allLinks[i];
+                            var href = (link.href || '').toLowerCase();
+                            var text = (link.textContent || link.innerText || '').toLowerCase();
+                            var score = 0;
                             
-                            for (var i = 0; i < results.length; i++) {
-                                var result = results[i];
-                                var resultText = (result.textContent || result.innerText || '').toLowerCase();
-                                
-                                console.log('Result', i, ':', resultText.substring(0, 50));
-                                
-                                // Skip "Recently Viewed" or "Recent" sections
-                                if (resultText.includes('recent') && resultText.includes('viewed')) {
-                                    console.log('  → Skipping (Recently Viewed section)');
-                                    continue;
+                            // Skip homepage, recently viewed, help, etc.
+                            if (href.includes('/console/home?') || 
+                                href.includes('/support/') ||
+                                href.includes('/documentation/') ||
+                                text.includes('recently viewed') ||
+                                text.includes('recent searches')) {
+                                continue;
+                            }
+                            
+                            // Scoring logic (higher = better match)
+                            // Exact service name in URL = 100 points
+                            if (href.includes('/' + serviceNameLower + '/') || 
+                                href.includes('/' + serviceNameLower + 'v2/')) {
+                                score += 100;
+                            }
+                            
+                            // Service name in URL path = 50 points
+                            serviceWords.forEach(function(word) {
+                                if (word.length > 2 && href.includes(word)) {
+                                    score += 50;
                                 }
-                                
-                                // Prefer exact matches or service links
-                                var href = result.href || '';
-                                if (href.includes('console.aws.amazon.com') && !href.includes('/home?')) {
-                                    bestResult = result;
-                                    console.log('  → Found console link!');
+                            });
+                            
+                            // Exact text match = 40 points
+                            if (text.trim() === serviceName.toLowerCase()) {
+                                score += 40;
+                            }
+                            
+                            // Text contains service words = 20 points each
+                            serviceWords.forEach(function(word) {
+                                if (word.length > 2 && text.includes(word)) {
+                                    score += 20;
+                                }
+                            });
+                            
+                            // Service console URL structure = 30 points
+                            if (href.match(/console\\.aws\\.amazon\\.com\\/[a-z-]+\\/home/)) {
+                                score += 30;
+                            }
+                            
+                            console.log('Result', i, '- Score:', score, '- Text:', text.substring(0, 40), '- URL:', href.substring(0, 60));
+                            
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMatch = link;
+                            }
+                        }
+                        
+                        if (bestMatch && bestScore >= 30) {
+                            console.log('✅ BEST MATCH (score:', bestScore, ')');
+                            console.log('   Text:', bestMatch.textContent.substring(0, 50));
+                            console.log('   URL:', bestMatch.href.substring(0, 80));
+                            bestMatch.scrollIntoView({behavior: 'instant', block: 'center'});
+                            bestMatch.click();
+                        } else if (allLinks.length > 0) {
+                            console.log('⚠️  No high-confidence match, trying first service link');
+                            // Find first non-homepage service link
+                            for (var i = 0; i < Math.min(allLinks.length, 10); i++) {
+                                var link = allLinks[i];
+                                if (!link.href.includes('/console/home?')) {
+                                    console.log('   Clicking:', link.href.substring(0, 80));
+                                    link.scrollIntoView({behavior: 'instant', block: 'center'});
+                                    link.click();
                                     break;
                                 }
-                                
-                                // Fallback: use first non-recent result
-                                if (!bestResult && resultText.includes(serviceNameLower)) {
-                                    bestResult = result;
-                                }
-                            }
-                            
-                            if (bestResult) {
-                                console.log('✅ Clicking best result:', (bestResult.textContent || '').substring(0, 50));
-                                bestResult.click();
-                            } else if (results.length > 0) {
-                                console.log('⚠️  No perfect match, clicking first result');
-                                results[0].click();
                             }
                         } else {
-                            console.log('ERROR: No search results found');
+                            console.log('❌ No suitable results found');
                         }
-                    }, 1000); // Increased wait time for results
-                }, 500);
+                    }, 1500); // Longer wait for results to populate
+                }, 800); // Longer wait for search input to appear
                 
                 return {success: true};
             """, service_name)
             
-            time.sleep(5)  # Wait for navigation to complete
+            time.sleep(6)  # Wait longer for navigation to complete
             
             current_url = self.driver.current_url
-            console.print(f"[dim]   After search, at: {current_url}[/dim]")
+            console.print(f"[dim]   Landed on: {current_url[:100]}...[/dim]")
             
-            # STRICT validation: Must NOT be on homepage
+            # Improved validation
+            service_keywords = service_name.lower().replace("-", "").replace("_", "").replace(" ", "")
+            url_normalized = current_url.lower().replace("-", "").replace("_", "")
+            
+            # STRICT: Must NOT be on homepage
             if '/console/home' in current_url:
-                console.print(f"[yellow]⚠️  Search landed on homepage, not actual service[/yellow]")
+                console.print(f"[yellow]⚠️  Still on homepage - search may have failed[/yellow]")
                 return False
             
-            # Validate we're on a service console
-            if 'console.aws.amazon.com' in current_url and current_url != self.driver.current_url:
-                console.print(f"[green]✅ Search navigation successful![/green]")
+            # Check if service appears in URL
+            if service_keywords in url_normalized:
+                console.print(f"[bold green]✅ Navigated to {service_name}![/bold green]")
                 return True
             
-            # Check if service key in URL
-            if service_key and service_key.lower() in current_url.lower():
-                console.print(f"[green]✅ Search found {service_name} service![/green]")
+            # Check for common service URL patterns
+            if service_key and service_key.lower().replace("-", "") in url_normalized:
+                console.print(f"[bold green]✅ Found {service_name} console![/bold green]")
                 return True
             
-            console.print(f"[yellow]⚠️  Search completed but service validation unclear[/yellow]")
+            # If we're on ANY service page (not homepage), consider it success
+            if 'console.aws.amazon.com' in current_url and '/home' not in current_url:
+                console.print(f"[green]✅ On AWS service console[/green]")
+                return True
+            
+            console.print(f"[yellow]⚠️  Navigation completed but couldn't confirm correct service[/yellow]")
             return False
         
         except Exception as e:
-            console.print(f"[red]❌ Search navigation failed: {e}[/red]")
+            console.print(f"[red]❌ Search failed: {str(e)[:100]}[/red]")
+            import traceback
+            traceback.print_exc()
             return False
     
     def go_back(self) -> bool:
