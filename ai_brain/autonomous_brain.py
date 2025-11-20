@@ -49,7 +49,7 @@ class AutonomousBrain:
         console.print("[dim]   LLM-first architecture enabled[/dim]")
         console.print("[dim]   Real-time knowledge retrieval ready[/dim]\n")
     
-    def process_request(self, user_request: str, conversation_history: List[Dict]) -> str:
+    def process_request(self, user_request: str, conversation_history: List[Dict]) -> Dict[str, Any]:
         """
         Main entry point for autonomous processing.
         
@@ -64,7 +64,7 @@ class AutonomousBrain:
             conversation_history: Recent conversation context
             
         Returns:
-            Final response to user
+            Dict with delegate_to_claude flag or final response
         """
         console.print("\n[bold cyan]🧠 BRAIN ANALYSIS PHASE[/bold cyan]")
         
@@ -72,21 +72,23 @@ class AutonomousBrain:
         analysis = self._analyze_request(user_request, conversation_history)
         
         if not analysis.get("success"):
-            return f"I couldn't analyze that request: {analysis.get('error')}"
+            console.print(f"[yellow]⚠️  Analysis issue, delegating to Claude...[/yellow]")
+            return {"delegate_to_claude": True}
         
-        # Phase 2: Knowledge Lookup & Web Search
+        # Phase 2: Knowledge Lookup & Web Search (only for critical questions)
         enriched_plan = self._enrich_with_knowledge(analysis)
         
         # Phase 3: Tool Resolution
         execution_ready = self._resolve_tools(enriched_plan)
         
-        # Phase 4: Execute
+        # Phase 4: Execute (delegate to Claude with enriched context)
         result = self._execute_plan(execution_ready)
         
         # Phase 5: Learn
         self._learn_from_execution(user_request, execution_ready, result)
         
-        return result.get("response", "Task completed")
+        # Return delegation signal so Claude executes with enriched knowledge
+        return {"delegate_to_claude": True, "enriched_context": enriched_plan.get("knowledge", {})}
     
     def _analyze_request(
         self,
@@ -205,18 +207,38 @@ Focus on extracting ALL details from the request."""
         
         For each question in the analysis:
         1. Check knowledge base first
-        2. If unknown, search the web
+        2. If unknown AND critical, search the web
         3. Learn and store the answer
         
         Returns:
             Enriched analysis with answers
         """
         questions = analysis.get("questions", [])
+        
+        # Skip enrichment if no critical questions (avoid unnecessary web searches)
+        if not questions or len(questions) == 0:
+            console.print(f"\n[dim]🔍 No knowledge gaps detected, proceeding...[/dim]")
+            analysis["knowledge"] = {}
+            return analysis
+        
         answers = {}
+        console.print(f"\n[bold cyan]🔍 KNOWLEDGE ENRICHMENT ({len(questions)} questions)[/bold cyan]")
         
-        console.print(f"\n[bold cyan]🔍 KNOWLEDGE ENRICHMENT[/bold cyan]")
+        # Limit web searches to avoid spam (only search critical technical questions)
+        critical_keywords = ["regional", "global", "field", "endpoint", "api", "default"]
         
-        for question in questions:
+        for question in questions[:3]:  # Limit to first 3 questions
+            # Skip clarifying questions (those are for user, not web)
+            question_lower = question.lower()
+            if any(word in question_lower for word in ["should be", "user wants", "looking for", "specific"]):
+                console.print(f"[dim]Skipping clarifying question: {question}[/dim]")
+                continue
+            
+            # Only search if it's a technical question
+            if not any(keyword in question_lower for keyword in critical_keywords):
+                console.print(f"[dim]Skipping non-technical question: {question}[/dim]")
+                continue
+            
             console.print(f"[cyan]Q: {question}[/cyan]")
             
             # Try knowledge base first
@@ -231,21 +253,20 @@ Focus on extracting ALL details from the request."""
                     "confidence": 1.0
                 }
             else:
-                # Search the web
+                # Search the web for critical technical info only
                 console.print("[yellow]🌐 Searching web...[/yellow]")
-                search_result = self.web_search.search(question, max_results=3)
+                search_result = self.web_search.search(question, max_results=2)
                 
                 if search_result.get("success"):
                     answer = search_result.get("answer", "No answer found")
                     sources = search_result.get("sources", [])
                     
                     console.print(f"[green]✅ Found via web search[/green]")
-                    console.print(f"[dim]   Sources: {len(sources)}[/dim]")
                     
                     answers[question] = {
                         "answer": answer,
                         "source": "web_search",
-                        "sources": sources,
+                        "sources": sources[:2],
                         "confidence": 0.8
                     }
                     
@@ -258,12 +279,10 @@ Focus on extracting ALL details from the request."""
                         confidence=0.8
                     )
                 else:
-                    console.print("[yellow]⚠️  Could not find answer[/yellow]")
-                    answers[question] = {
-                        "answer": None,
-                        "source": "unknown",
-                        "confidence": 0.0
-                    }
+                    console.print("[yellow]⚠️  Search unavailable, continuing...[/yellow]")
+        
+        if answers:
+            console.print(f"[green]✅ Answered {len(answers)} question(s)[/green]")
         
         analysis["knowledge"] = answers
         return analysis
