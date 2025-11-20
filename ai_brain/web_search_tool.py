@@ -182,23 +182,23 @@ class WebSearchTool:
         """Fallback search using DuckDuckGo (no API key required)"""
         import warnings
         
-        # Suppress RuntimeWarning about package rename
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*duckduckgo_search.*")
+        try:
+            # Suppress ALL RuntimeWarnings during DDGS operations
+            # The ddgs package may emit warnings about legacy compatibility
+            warnings.filterwarnings("ignore", category=RuntimeWarning)
             
+            # Try new package name first (ddgs)
             try:
-                # Try new package name first (ddgs)
-                try:
-                    from ddgs import DDGS
-                except ImportError:
-                    # Fallback to old package name for compatibility
-                    from duckduckgo_search import DDGS
-                
-                ddgs = DDGS()
-                results = []
-                
-                # Get search results
-                search_results = ddgs.text(query, max_results=max_results)
+                from ddgs import DDGS
+            except ImportError:
+                # Fallback to old package name for compatibility
+                from duckduckgo_search import DDGS
+            
+            ddgs = DDGS()
+            results = []
+            
+            # Get search results
+            search_results = ddgs.text(query, max_results=max_results)
                 
                 for item in search_results:
                     results.append({
