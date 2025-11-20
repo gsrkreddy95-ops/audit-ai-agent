@@ -1190,7 +1190,12 @@ The agent will:
                     "statuses": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Filter by statuses (e.g., ['In Progress','Open'])"
+                        "description": """Filter by statuses (e.g., ['In Progress','Open','Backlog']).
+                        
+IMPORTANT: For 'active' tickets in XDR project, use statusCategory instead:
+- Pass ['!Done'] or ['!Completed'] to get ALL active tickets (includes Backlog, In Progress, Open, To Do, In Review, etc.)
+- This is more accurate than listing specific statuses which may miss tickets in Backlog or other active states.
+- Common XDR statuses: Backlog (majority), In Progress, To Do, In Review, Ready for QA, Open"""
                     },
                     "assignee": {
                         "type": "string",

@@ -13,6 +13,7 @@ import os
 import json
 import csv
 import re
+import copy
 from typing import Dict, List, Optional, Any, Tuple, Union
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -149,19 +150,20 @@ class JiraIntegration:
                 board_name=None,
                 _allow_date_slicing=False
             )
+            slice_full = self.get_last_full_tickets() or slice_tickets
             # If a weekly slice still returns a high count (approaching 1000),
             # fall back to day-bucketing to ensure accuracy and reduce payloads.
             if len(slice_tickets) >= 900:
                 console.print(
                     f"[dim]   Slice {idx}: {len(slice_tickets)} tickets near cap. Switching to day slicing.[/dim]"
                 )
-                slice_tickets = self._fetch_with_day_slices(
+                slice_full = self._fetch_with_day_slices(
                     condition_jql=condition_jql,
                     order_clause=order_segment,
                     week_start=slice_start,
                     week_end=slice_end
                 )
-            aggregated.extend(slice_tickets)
+            aggregated.extend(slice_full)
         return aggregated
 
     def _fetch_with_day_slices(
@@ -189,7 +191,8 @@ class JiraIntegration:
                 board_name=None,
                 _allow_date_slicing=False
             )
-            day_results.extend(day_tickets)
+            day_full = self.get_last_full_tickets() or day_tickets
+            day_results.extend(day_full)
         return day_results
 
     def dashboard_summary(
@@ -301,45 +304,50 @@ class JiraIntegration:
             except ValueError:
                 clauses.append(f"created <= '{created_end}'")
         if statuses:
-            include_statuses: List[str] = []
-            exclude_statuses: List[str] = []
-            for status in statuses:
-                if not status:
-                    continue
-                raw = status.strip()
-                if not raw:
-                    continue
-                lowered = raw.lower()
-                negated = False
-                cleaned = raw
+            # Special handling: if user passed generic "active" marker, use statusCategory instead
+            if len(statuses) == 1 and statuses[0].lower() in ["active", "not done", "open"]:
+                # Use statusCategory for broader, more accurate filtering
+                clauses.append('statusCategory != "Done"')
+            else:
+                include_statuses: List[str] = []
+                exclude_statuses: List[str] = []
+                for status in statuses:
+                    if not status:
+                        continue
+                    raw = status.strip()
+                    if not raw:
+                        continue
+                    lowered = raw.lower()
+                    negated = False
+                    cleaned = raw
+                    
+                    if lowered.startswith("not "):
+                        negated = True
+                        cleaned = raw[4:]
+                    elif raw.startswith("!"):
+                        negated = True
+                        cleaned = raw[1:]
+                    elif lowered.startswith("!="):
+                        negated = True
+                        cleaned = raw[2:]
+                    
+                    cleaned = cleaned.strip().strip('"\'')
+                    if not cleaned:
+                        continue
+                    
+                    if negated:
+                        exclude_statuses.append(cleaned)
+                    else:
+                        include_statuses.append(cleaned)
                 
-                if lowered.startswith("not "):
-                    negated = True
-                    cleaned = raw[4:]
-                elif raw.startswith("!"):
-                    negated = True
-                    cleaned = raw[1:]
-                elif lowered.startswith("!="):
-                    negated = True
-                    cleaned = raw[2:]
-                
-                cleaned = cleaned.strip().strip('"\'')
-                if not cleaned:
-                    continue
-                
-                if negated:
-                    exclude_statuses.append(cleaned)
-                else:
-                    include_statuses.append(cleaned)
-            
-            if include_statuses:
-                quoted_in = self._quote_list(include_statuses)
-                if quoted_in:
-                    clauses.append(f"status in ({quoted_in})")
-            if exclude_statuses:
-                quoted_out = self._quote_list(exclude_statuses)
-                if quoted_out:
-                    clauses.append(f"status not in ({quoted_out})")
+                if include_statuses:
+                    quoted_in = self._quote_list(include_statuses)
+                    if quoted_in:
+                        clauses.append(f"status in ({quoted_in})")
+                if exclude_statuses:
+                    quoted_out = self._quote_list(exclude_statuses)
+                    if quoted_out:
+                        clauses.append(f"status not in ({quoted_out})")
         if assignee:
             clauses.append(f'assignee = "{assignee}"')
         if text_contains:
@@ -435,6 +443,7 @@ class JiraIntegration:
         self.team_field_id: Optional[str] = None
         self.board_filter_cache: Dict[str, str] = {}
         self._field_map_initialized = False
+        self._last_full_tickets: List[Dict[str, Any]] = []
         
         if not all([self.jira_url, self.email, self.api_token]):
             console.print("[yellow]⚠️  Jira credentials not found in environment![/yellow]")
@@ -1255,6 +1264,8 @@ class JiraIntegration:
         if not self._check_connection():
             return []
         
+        self._last_full_tickets = []
+        
         try:
             # Build JQL query
             jql_parts = []
@@ -1367,9 +1378,10 @@ class JiraIntegration:
                         start_date=created_range[0],  # type: ignore[index]
                         end_date=created_range[1]     # type: ignore[index]
                     )
-                    sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
-                    # LLM safety: compact ticket payload
-                    sliced_tickets = [self._compact_ticket_for_llm(t) for t in sliced_tickets]
+                    tickets_for_export = self._apply_post_filters(sliced_tickets, jql_query)
+                    tickets_for_export = [copy.deepcopy(ticket) for ticket in tickets_for_export]
+                    self._last_full_tickets = tickets_for_export
+                    sliced_tickets = [self._compact_ticket_for_llm(copy.deepcopy(ticket)) for ticket in tickets_for_export]
                     console.print(f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]")
                     return sliced_tickets
                 
@@ -1546,17 +1558,19 @@ class JiraIntegration:
                         start_date=created_range[0],  # type: ignore[index]
                         end_date=created_range[1]     # type: ignore[index]
                     )
-                    sliced_tickets = self._apply_post_filters(sliced_tickets, jql_query)
-                    # LLM safety: compact ticket payload
-                    sliced_tickets = [self._compact_ticket_for_llm(t) for t in sliced_tickets]
+                    tickets_for_export = self._apply_post_filters(sliced_tickets, jql_query)
+                    tickets_for_export = [copy.deepcopy(ticket) for ticket in tickets_for_export]
+                    self._last_full_tickets = tickets_for_export
+                    sliced_tickets = [self._compact_ticket_for_llm(copy.deepcopy(ticket)) for ticket in tickets_for_export]
                     console.print(
                         f"[green]✅ Found {len(sliced_tickets)} tickets after date slicing[/green]"
                     )
                     return sliced_tickets
                 
-                tickets = self._apply_post_filters(tickets, jql_query)
-                # LLM safety: compact ticket payload
-                tickets = [self._compact_ticket_for_llm(t) for t in tickets]
+                tickets_for_export = self._apply_post_filters(tickets, jql_query)
+                tickets_for_export = [copy.deepcopy(ticket) for ticket in tickets_for_export]
+                self._last_full_tickets = tickets_for_export
+                tickets = [self._compact_ticket_for_llm(copy.deepcopy(ticket)) for ticket in tickets_for_export]
                 if guard_triggered:
                     console.print(
                         "[yellow]⚠️  Results truncated at 5,000 tickets due to missing created date filter.[/yellow]"
@@ -1584,13 +1598,20 @@ class JiraIntegration:
                     return []
                 tickets = [self._build_ticket_dict(issue) for issue in issues]
                 
-                tickets = self._apply_post_filters(tickets, jql_query)
+                tickets_for_export = self._apply_post_filters(tickets, jql_query)
+                tickets_for_export = [copy.deepcopy(ticket) for ticket in tickets_for_export]
+                self._last_full_tickets = tickets_for_export
+                tickets = [self._compact_ticket_for_llm(copy.deepcopy(ticket)) for ticket in tickets_for_export]
                 console.print(f"[green]✅ Found {len(tickets)} tickets[/green]")
                 return tickets
         
         except Exception as e:
             console.print(f"[red]❌ JQL search failed: {e}[/red]")
             return []
+
+    def get_last_full_tickets(self) -> List[Dict[str, Any]]:
+        """Return the most recent full ticket payloads collected by search_jql."""
+        return self._last_full_tickets or []
     
     def get_ticket(self, ticket_key: str) -> Optional[Dict[str, Any]]:
         """
@@ -1695,8 +1716,14 @@ class JiraIntegration:
                 # Export to CSV
                 with open(output_path, 'w', newline='', encoding='utf-8') as f:
                     if tickets:
-                        # Use all keys from first ticket
-                        fieldnames = list(tickets[0].keys())
+                        ordered_fields: List[str] = []
+                        seen_fields = set()
+                        for ticket in tickets:
+                            for key in ticket.keys():
+                                if key not in seen_fields:
+                                    ordered_fields.append(key)
+                                    seen_fields.add(key)
+                        fieldnames = ordered_fields
                         writer = csv.DictWriter(f, fieldnames=fieldnames)
                         writer.writeheader()
                         
