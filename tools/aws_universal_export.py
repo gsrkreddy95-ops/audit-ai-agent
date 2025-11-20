@@ -8,15 +8,21 @@ from typing import Dict, List, Optional
 from rich.console import Console
 
 # Import both tools
-from tools.aws_export_tool import (
-    AWSExportToolEnhanced,
-    export_aws_data as export_detailed
-)
-from tools.aws_comprehensive_audit_collector import (
-    AWSComprehensiveAuditCollector,
-    collect_comprehensive_audit_evidence
-)
-from tools.aws_export_filters import resolve_date_range, filter_records_by_date
+# Try to use unified tool first, fallback to legacy tools
+try:
+    from tools.aws_export_unified import UnifiedAWSExportTool, export_aws_unified
+    USE_UNIFIED_TOOL = True
+except ImportError:
+    USE_UNIFIED_TOOL = False
+    from tools.aws_export_tool import (
+        AWSExportToolEnhanced,
+        export_aws_data as export_detailed
+    )
+    from tools.aws_comprehensive_audit_collector import (
+        AWSComprehensiveAuditCollector,
+        collect_comprehensive_audit_evidence
+    )
+    from tools.aws_export_filters import resolve_date_range, filter_records_by_date
 
 console = Console()
 
@@ -58,6 +64,29 @@ def export_aws_universal(
     end_date: Optional[str] = None,
     date_field: Optional[str] = None
 ) -> bool:
+    """
+    Universal AWS export function - uses unified tool if available.
+    
+    This is a compatibility wrapper that routes to UnifiedAWSExportTool
+    or falls back to legacy tools.
+    """
+    if USE_UNIFIED_TOOL:
+        return export_aws_unified(
+            service=service,
+            export_type=export_type,
+            format=format,
+            aws_account=aws_account,
+            aws_region=aws_region,
+            output_path=output_path,
+            use_comprehensive=use_comprehensive,
+            filter_by_date=filter_by_date,
+            audit_period=audit_period,
+            start_date=start_date,
+            end_date=end_date,
+            date_field=date_field
+        )
+    
+    # Legacy implementation below
     """
     Universal AWS export function - automatically chooses best tool
     

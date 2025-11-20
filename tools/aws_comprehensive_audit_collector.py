@@ -540,7 +540,7 @@ class AWSComprehensiveAuditCollector:
         },
     }
     
-    def __init__(self, aws_profile: str, region: str = 'us-east-1'):
+    def __init__(self, aws_profile: str, region: str = 'us-east-1', use_connection_pool: bool = True):
         """
         Initialize comprehensive collector
         
@@ -552,6 +552,16 @@ class AWSComprehensiveAuditCollector:
         self.region = region
         self.session = None
         self.clients = {}
+        self.use_connection_pool = use_connection_pool
+        
+        # Initialize ConnectionPool if enabled
+        if self.use_connection_pool:
+            try:
+                from ai_brain.shared import ConnectionPool
+                self.connection_pool = ConnectionPool()
+            except ImportError:
+                self.use_connection_pool = False
+                console.print("[yellow]⚠️  ConnectionPool not available, using direct clients[/yellow]")
         
         # Set AWS profile
         if aws_profile:
@@ -567,11 +577,20 @@ class AWSComprehensiveAuditCollector:
         return self.session
     
     def _get_client(self, service: str):
-        """Get or create boto3 client for service"""
-        if service not in self.clients:
-            session = self._get_session()
-            self.clients[service] = session.client(service)
-        return self.clients[service]
+        """Get or create boto3 client for service (uses ConnectionPool if enabled)"""
+        if self.use_connection_pool and hasattr(self, 'connection_pool'):
+            # Use ConnectionPool for efficient client reuse
+            return self.connection_pool.get_client(
+                service=service,
+                region=self.region,
+                profile=self.profile
+            )
+        else:
+            # Fallback to direct client creation
+            if service not in self.clients:
+                session = self._get_session()
+                self.clients[service] = session.client(service, region_name=self.region)
+            return self.clients[service]
     
     def list_all_services(self) -> List[str]:
         """Get list of all supported services"""
