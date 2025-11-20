@@ -1422,6 +1422,10 @@ class JiraIntegration:
                 
                 total_available = None  # Will be set after first request
                 
+                page_number = 1
+                max_pages_without_progress = 3  # Timeout after 3 stuck iterations
+                pages_without_progress = 0
+                
                 while True:
                     # Fetch a page of results using Jira Cloud's new JQL API
                     try:
@@ -1434,11 +1438,18 @@ class JiraIntegration:
                                 break
                             current_page_size = min(page_size, remaining)
                         
+                        # Show progress for page fetches
+                        if page_number > 1:
+                            console.print(f"[dim]   Fetching page {page_number}... (startAt={start_at})[/dim]")
+                        
                         fields_list = [
                             "key", "summary", "status", "priority", "assignee",
                             "reporter", "created", "updated", "labels", "issuetype",
                             "description", "fixVersions", "components", "duedate"
                         ]
+                        
+                        tickets_before_page = len(tickets)
+                        
                         search_results = self._request_jira_search_page(
                             jql_query=jql_query,
                             start_at=start_at,
@@ -1503,6 +1514,19 @@ class JiraIntegration:
                     if total_fetched >= next_log_threshold:
                         console.print(f"[dim]   Fetched {total_fetched} tickets so far...[/dim]")
                         next_log_threshold += log_interval
+                    
+                    # Detect if we're stuck (no new tickets added despite API returning data)
+                    tickets_after_page = len(tickets)
+                    if tickets_after_page == tickets_before_page and len(page_issues) > 0:
+                        pages_without_progress += 1
+                        console.print(f"[yellow]⚠️  Page {page_number} added 0 new tickets (all duplicates, attempt {pages_without_progress}/{max_pages_without_progress})[/yellow]")
+                        if pages_without_progress >= max_pages_without_progress:
+                            console.print("[yellow]⚠️  Stuck in pagination loop (Jira returning duplicates). Stopping.[/yellow]")
+                            break
+                    else:
+                        pages_without_progress = 0  # Reset counter
+                    
+                    page_number += 1
                     
                     # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
                     # and Jira is clearly ignoring filters, stop and rely on post-filter
