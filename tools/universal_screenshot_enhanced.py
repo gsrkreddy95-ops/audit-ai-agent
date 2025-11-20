@@ -99,7 +99,7 @@ class UniversalScreenshotEnhanced:
     don't break constructor (e.g., tracing, profiling). Unknown kwargs are ignored.
     """
     
-    def __init__(self, headless: bool = False, timeout: int = 20, debug: bool = False, persistent_profile: bool = False, **kwargs):
+    def __init__(self, headless: bool = False, timeout: int = 20, debug: bool = False, persistent_profile: bool = False, profile_dir: Optional[str] = None, **kwargs):
         self.headless = headless
         self.timeout = timeout
         self.debug = debug
@@ -107,8 +107,12 @@ class UniversalScreenshotEnhanced:
         self.driver = None
         self.wait = None
         
-        # Only use persistent profile if explicitly requested
-        if self.persistent_profile:
+        # Support custom profile directory for multi-account sessions
+        if profile_dir:
+            self.user_data_dir = profile_dir
+            if self.debug:
+                console.print(f"[dim]📂 Using custom profile: {self.user_data_dir}[/dim]")
+        elif self.persistent_profile:
             self.user_data_dir = os.path.expanduser('~/.audit-agent-universal-selenium')
             if self.debug:
                 console.print(f"[dim]📂 Using persistent profile: {self.user_data_dir}[/dim]")

@@ -34,7 +34,8 @@ class BrowserSessionManager:
     """
     
     # Class-level variables (shared across all instances)
-    _browser_instance = None
+    _browser_sessions: Dict[str, any] = {}  # {account: browser_instance}
+    _browser_instance = None  # Legacy: points to primary browser
     _authenticated_accounts = set()  # Track which AWS accounts are authenticated
     _current_region = None
     _current_service = None
@@ -42,6 +43,7 @@ class BrowserSessionManager:
     _last_authenticated_account = None
     _last_authenticated_region = None
     _account_role_preferences: Dict[str, str] = {}
+    _max_parallel_sessions = 3  # Max concurrent browser sessions
 
     @classmethod
     def _is_invalid_session_error(cls, error: Exception) -> bool:
@@ -65,6 +67,15 @@ class BrowserSessionManager:
             except Exception:
                 pass
         cls._browser_instance = None
+        
+        # Also close all account-specific sessions
+        for account, browser in list(cls._browser_sessions.items()):
+            try:
+                browser.close()
+            except:
+                pass
+        cls._browser_sessions.clear()
+        
         cls._authenticated_accounts.clear()
         cls._current_region = None
         cls._current_service = None
@@ -110,16 +121,78 @@ class BrowserSessionManager:
         pass
     
     @classmethod
-    def get_browser(cls, force_new: bool = False):
+    def get_browser(cls, account: Optional[str] = None, force_new: bool = False):
         """
-        Get the existing browser instance or create a new one.
+        Get or create a browser session for the specified account.
+        
+        Supports multiple parallel browser sessions (one per account).
         
         Args:
-            force_new: If True, closes existing browser and creates new one
+            account: AWS account name (e.g., 'ctr-prod'). None = use/create primary session.
+            force_new: If True, closes existing session for this account and creates new one
         
         Returns:
             Browser instance (UniversalScreenshotEnhanced)
         """
+        # If account specified, manage account-specific session
+        if account:
+            account_key = account.lower().strip()
+            
+            # Force new session if requested
+            if force_new and account_key in cls._browser_sessions:
+                console.print(f"[yellow]🔄 Closing existing browser for {account} to create fresh session...[/yellow]")
+                try:
+                    cls._browser_sessions[account_key].close()
+                except:
+                    pass
+                del cls._browser_sessions[account_key]
+                cls._authenticated_accounts.discard(account)
+            
+            # Check if we already have a valid session for this account
+            if account_key in cls._browser_sessions:
+                browser = cls._browser_sessions[account_key]
+                # Validate session
+                driver = getattr(browser, 'driver', None)
+                if driver:
+                    try:
+                        driver.execute_script("return document.readyState")
+                        console.print(f"[dim]♻️  Reusing browser session for {account} (no new Duo auth!)[/dim]")
+                        return browser
+                    except:
+                        # Session invalid, remove it
+                        console.print(f"[yellow]⚠️  Session for {account} expired, creating new one...[/yellow]")
+                        del cls._browser_sessions[account_key]
+                        cls._authenticated_accounts.discard(account)
+            
+            # Check parallel session limit
+            if len(cls._browser_sessions) >= cls._max_parallel_sessions:
+                console.print(f"[yellow]⚠️  Max parallel sessions ({cls._max_parallel_sessions}) reached[/yellow]")
+                console.print(f"[yellow]   Closing oldest session to make room for {account}...[/yellow]")
+                # Close oldest session (first in dict)
+                oldest_account = next(iter(cls._browser_sessions))
+                try:
+                    cls._browser_sessions[oldest_account].close()
+                except:
+                    pass
+                del cls._browser_sessions[oldest_account]
+                cls._authenticated_accounts.discard(oldest_account)
+            
+            # Create new browser session for this account
+            console.print(f"[bold cyan]🚀 Launching NEW browser session for {account}![/bold cyan]")
+            browser = cls._create_new_browser_instance(account)
+            
+            if browser:
+                cls._browser_sessions[account_key] = browser
+                # Also set as primary if it's the first one
+                if not cls._browser_instance:
+                    cls._browser_instance = browser
+                console.print(f"[green]✅ Browser session ready for {account} (will persist)[/green]")
+                return browser
+            else:
+                console.print(f"[red]❌ Failed to launch browser for {account}[/red]")
+                return None
+        
+        # Legacy behavior: primary session (no account specified)
         if force_new and cls._browser_instance:
             console.print("[yellow]🔄 Closing existing browser to create fresh session...[/yellow]")
             cls._teardown_browser_instance()
@@ -156,7 +229,7 @@ class BrowserSessionManager:
         Returns:
             True if authenticated (or already was)
         """
-        browser = cls.get_browser()
+        browser = cls.get_browser(account=account)
         if not browser:
             return False
         
@@ -729,6 +802,60 @@ class BrowserSessionManager:
         return None
 
     @classmethod
+    def _create_new_browser_instance(cls, account: str):
+        """
+        Create a new browser instance with account-specific profile.
+        
+        Args:
+            account: AWS account name for this browser
+            
+        Returns:
+            Browser instance or None
+        """
+        from tools.universal_screenshot_enhanced import UniversalScreenshotEnhanced
+        import os
+        
+        # Create account-specific profile directory
+        profile_base = os.path.expanduser("~/.audit-agent-browsers")
+        os.makedirs(profile_base, exist_ok=True)
+        account_profile = os.path.join(profile_base, f"profile-{account}")
+        
+        console.print(f"[cyan]📂 Using profile: {account_profile}[/cyan]")
+        
+        try:
+            # Create browser with account-specific profile
+            browser = UniversalScreenshotEnhanced(
+                headless=False,
+                timeout=180,
+                debug=True,
+                persistent_profile=True,
+                profile_dir=account_profile  # Account-specific profile
+            )
+            
+            if browser.connect():
+                return browser
+            else:
+                console.print(f"[red]❌ Browser connection failed for {account}[/red]")
+                return None
+                
+        except Exception as e:
+            console.print(f"[red]❌ Failed to create browser for {account}: {e}[/red]")
+            return None
+    
+    @classmethod
+    def _ensure_browser_session_valid_for_account(cls, browser) -> bool:
+        """Check if an account-specific browser session is still valid."""
+        driver = getattr(browser, 'driver', None)
+        if not driver:
+            return False
+        
+        try:
+            driver.execute_script("return document.readyState")
+            return True
+        except:
+            return False
+    
+    @classmethod
     def _get_active_aws_account(cls, browser) -> Optional[str]:
         """
         Detect which AWS account is actually active in the browser.
@@ -891,6 +1018,8 @@ class BrowserSessionManager:
         """Get current session status"""
         return {
             "browser_active": cls._browser_instance is not None,
+            "active_sessions": list(cls._browser_sessions.keys()),
+            "total_sessions": len(cls._browser_sessions),
             "authenticated_accounts": list(cls._authenticated_accounts),
             "current_region": cls._current_region,
             "last_authenticated_account": cls._last_authenticated_account,
