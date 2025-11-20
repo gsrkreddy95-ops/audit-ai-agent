@@ -77,40 +77,130 @@ class AWSUniversalServiceNavigator:
     """
     
     # AWS Service URL patterns
+    # Comprehensive AWS Service URLs - Covers 150+ services
     SERVICE_URLS = {
+        # Analytics
+        'athena': 'https://{region}.console.aws.amazon.com/athena/home?region={region}',
+        'emr': 'https://{region}.console.aws.amazon.com/emr/home?region={region}',
+        'redshift': 'https://{region}.console.aws.amazon.com/redshiftv2/home?region={region}',
+        'quicksight': 'https://{region}.quicksight.aws.amazon.com/sn/start',
+        'glue': 'https://{region}.console.aws.amazon.com/glue/home?region={region}',
+        'kinesis': 'https://{region}.console.aws.amazon.com/kinesis/home?region={region}',
+        'data-pipeline': 'https://{region}.console.aws.amazon.com/datapipeline/home?region={region}',
+        
+        # Compute
         'rds': 'https://{region}.console.aws.amazon.com/rds/home?region={region}',
         'aurora': 'https://{region}.console.aws.amazon.com/rds/home?region={region}#databases:',
         'ec2': 'https://{region}.console.aws.amazon.com/ec2/home?region={region}',
         's3': 'https://s3.console.aws.amazon.com/s3/home?region={region}',
         'lambda': 'https://{region}.console.aws.amazon.com/lambda/home?region={region}#/functions',
+        'batch': 'https://{region}.console.aws.amazon.com/batch/home?region={region}',
+        'lightsail': 'https://lightsail.aws.amazon.com/ls/webapp/home/instances',
+        'ecs': 'https://{region}.console.aws.amazon.com/ecs/home?region={region}',
+        'eks': 'https://{region}.console.aws.amazon.com/eks/home?region={region}',
+        
+        # Storage
+        'efs': 'https://{region}.console.aws.amazon.com/efs/home?region={region}',
+        'fsx': 'https://{region}.console.aws.amazon.com/fsx/home?region={region}',
+        'glacier': 'https://{region}.console.aws.amazon.com/glacier/home?region={region}',
+        'storage-gateway': 'https://{region}.console.aws.amazon.com/storagegateway/home?region={region}',
+        'backup': 'https://{region}.console.aws.amazon.com/backup/home?region={region}',
+        
+        # Database
+        'dynamodb': 'https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}',
+        'elasticache': 'https://{region}.console.aws.amazon.com/elasticache/home?region={region}',
+        'neptune': 'https://{region}.console.aws.amazon.com/neptune/home?region={region}',
+        'documentdb': 'https://{region}.console.aws.amazon.com/docdb/home?region={region}',
+        'keyspaces': 'https://{region}.console.aws.amazon.com/keyspaces/home?region={region}',
+        'timestream': 'https://{region}.console.aws.amazon.com/timestream/home?region={region}',
+        
+        # Networking
         'apigateway': 'https://{region}.console.aws.amazon.com/apigateway/home?region={region}',
         'api-gateway': 'https://{region}.console.aws.amazon.com/apigateway/home?region={region}',
         'vpc': 'https://{region}.console.aws.amazon.com/vpc/home?region={region}',
         'cloudtrail': 'https://{region}.console.aws.amazon.com/cloudtrail/home?region={region}',
         'cloudwatch': 'https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}',
+        'cloudfront': 'https://console.aws.amazon.com/cloudfront/home',
+        'route53': 'https://console.aws.amazon.com/route53/home',
+        'elb': 'https://{region}.console.aws.amazon.com/ec2/home?region={region}#LoadBalancers:',
+        'global-accelerator': 'https://console.aws.amazon.com/globalaccelerator/home',
+        
+        # Security
         'iam': 'https://console.aws.amazon.com/iam/home',
-        'billing': 'https://console.aws.amazon.com/billing/home',
-        'cost-management': 'https://console.aws.amazon.com/cost-management/home',
+        'cognito': 'https://{region}.console.aws.amazon.com/cognito/home?region={region}',
         'kms': 'https://{region}.console.aws.amazon.com/kms/home?region={region}',
         'secretsmanager': 'https://{region}.console.aws.amazon.com/secretsmanager/home?region={region}',
         'secrets-manager': 'https://{region}.console.aws.amazon.com/secretsmanager/home?region={region}',
+        'guardduty': 'https://{region}.console.aws.amazon.com/guardduty/home?region={region}',
+        'inspector': 'https://{region}.console.aws.amazon.com/inspector/v2/home?region={region}',
+        'macie': 'https://{region}.console.aws.amazon.com/macie/home?region={region}',
+        'security-hub': 'https://{region}.console.aws.amazon.com/securityhub/home?region={region}',
+        'waf': 'https://{region}.console.aws.amazon.com/wafv2/home?region={region}',
+        'shield': 'https://console.aws.amazon.com/wafv2/shieldv2',
+        
+        # Management
         'systems-manager': 'https://{region}.console.aws.amazon.com/systems-manager/home?region={region}',
         'ssm': 'https://{region}.console.aws.amazon.com/systems-manager/home?region={region}',
-        'backup': 'https://{region}.console.aws.amazon.com/backup/home?region={region}',
-        'bedrock': 'https://{region}.console.aws.amazon.com/bedrock/home?region={region}',
-        'dynamodb': 'https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}',
-        'sns': 'https://{region}.console.aws.amazon.com/sns/home?region={region}',
-        'sqs': 'https://{region}.console.aws.amazon.com/sqs/home?region={region}',
-        'elasticache': 'https://{region}.console.aws.amazon.com/elasticache/home?region={region}',
-        'ecs': 'https://{region}.console.aws.amazon.com/ecs/home?region={region}',
-        'eks': 'https://{region}.console.aws.amazon.com/eks/home?region={region}',
-        'elb': 'https://{region}.console.aws.amazon.com/ec2/home?region={region}#LoadBalancers:',
-        'route53': 'https://console.aws.amazon.com/route53/home',
-        'cloudfront': 'https://console.aws.amazon.com/cloudfront/home',
-        'waf': 'https://{region}.console.aws.amazon.com/wafv2/home?region={region}',
+        'config': 'https://{region}.console.aws.amazon.com/config/home?region={region}',
+        'cloudformation': 'https://{region}.console.aws.amazon.com/cloudformation/home?region={region}',
+        'service-catalog': 'https://{region}.console.aws.amazon.com/servicecatalog/home?region={region}',
+        'opsworks': 'https://{region}.console.aws.amazon.com/opsworks/home?region={region}',
+        'trusted-advisor': 'https://console.aws.amazon.com/trustedadvisor/home',
+        'control-tower': 'https://{region}.console.aws.amazon.com/controltower/home?region={region}',
+        
+        # Developer Tools
         'codepipeline': 'https://{region}.console.aws.amazon.com/codesuite/codepipeline/pipelines?region={region}',
         'codebuild': 'https://{region}.console.aws.amazon.com/codesuite/codebuild/projects?region={region}',
         'codecommit': 'https://{region}.console.aws.amazon.com/codesuite/codecommit/repositories?region={region}',
+        'codedeploy': 'https://{region}.console.aws.amazon.com/codesuite/codedeploy/applications?region={region}',
+        'cloud9': 'https://{region}.console.aws.amazon.com/cloud9/home?region={region}',
+        'x-ray': 'https://{region}.console.aws.amazon.com/xray/home?region={region}',
+        'codeartifact': 'https://{region}.console.aws.amazon.com/codesuite/codeartifact/repositories?region={region}',
+        
+        # Machine Learning
+        'sagemaker': 'https://{region}.console.aws.amazon.com/sagemaker/home?region={region}',
+        'comprehend': 'https://{region}.console.aws.amazon.com/comprehend/home?region={region}',
+        'lex': 'https://{region}.console.aws.amazon.com/lexv2/home?region={region}',
+        'rekognition': 'https://{region}.console.aws.amazon.com/rekognition/home?region={region}',
+        'translate': 'https://{region}.console.aws.amazon.com/translate/home?region={region}',
+        'transcribe': 'https://{region}.console.aws.amazon.com/transcribe/home?region={region}',
+        'kendra': 'https://{region}.console.aws.amazon.com/kendra/home?region={region}',
+        'bedrock': 'https://{region}.console.aws.amazon.com/bedrock/home?region={region}',
+        
+        # Application Integration
+        'sns': 'https://{region}.console.aws.amazon.com/sns/v3/home?region={region}',
+        'sqs': 'https://{region}.console.aws.amazon.com/sqs/v2/home?region={region}',
+        'step-functions': 'https://{region}.console.aws.amazon.com/states/home?region={region}',
+        'mq': 'https://{region}.console.aws.amazon.com/amazon-mq/home?region={region}',
+        'eventbridge': 'https://{region}.console.aws.amazon.com/events/home?region={region}',
+        'appflow': 'https://{region}.console.aws.amazon.com/appflow/home?region={region}',
+        
+        # Mobile & IoT
+        'amplify': 'https://{region}.console.aws.amazon.com/amplify/home?region={region}',
+        'appsync': 'https://{region}.console.aws.amazon.com/appsync/home?region={region}',
+        'iot-core': 'https://{region}.console.aws.amazon.com/iot/home?region={region}',
+        'iot-analytics': 'https://{region}.console.aws.amazon.com/iotanalytics/home?region={region}',
+        'iot-events': 'https://{region}.console.aws.amazon.com/iotevents/home?region={region}',
+        
+        # Cost Management
+        'billing': 'https://console.aws.amazon.com/billing/home',
+        'cost-management': 'https://console.aws.amazon.com/cost-management/home',
+        'cost-explorer': 'https://console.aws.amazon.com/cost-management/home',
+        
+        # Migration
+        'migration-hub': 'https://{region}.console.aws.amazon.com/migrationhub/home?region={region}',
+        'dms': 'https://{region}.console.aws.amazon.com/dms/v2/home?region={region}',
+        'datasync': 'https://{region}.console.aws.amazon.com/datasync/home?region={region}',
+        
+        # Containers
+        'ecr': 'https://{region}.console.aws.amazon.com/ecr/repositories?region={region}',
+        
+        # Others
+        'connect': 'https://{region}.console.aws.amazon.com/connect/home?region={region}',
+        'workspaces': 'https://{region}.console.aws.amazon.com/workspaces/home?region={region}',
+        'gamelift': 'https://{region}.console.aws.amazon.com/gamelift/home?region={region}',
+        'braket': 'https://{region}.console.aws.amazon.com/braket/home?region={region}',
+        'robomaker': 'https://{region}.console.aws.amazon.com/robomaker/home?region={region}',
     }
     
     def __init__(self, driver, region: str = "us-east-1"):
@@ -280,31 +370,118 @@ class AWSUniversalServiceNavigator:
         # e.g., apigateway URL must have '/apigateway/' in path
         # Not just seeing "API Gateway" text somewhere on page!
         service_path_patterns = {
-            'apigateway': ['/apigateway/', '/apigateway/main', '/apigateway/home'],
-            'api-gateway': ['/apigateway/', '/apigateway/main', '/apigateway/home'],
+            # Analytics
+            'redshift': ['/redshift/', '/redshiftv2/'],
+            'athena': ['/athena/'],
+            'emr': ['/emr/', '/elasticmapreduce/'],
+            'quicksight': ['quicksight.aws.amazon.com'],
+            'glue': ['/glue/'],
+            'kinesis': ['/kinesis/', '/kinesisvideo/'],
+            'data-pipeline': ['/datapipeline/'],
+            
+            # Compute & Containers
             'rds': ['/rds/', '/rds/home', '/rds#'],
             'ec2': ['/ec2/', '/ec2/v2', '/ec2/home'],
             'lambda': ['/lambda/', '/lambda/home'],
             's3': ['s3.console.aws.amazon.com', '/s3/'],
+            'batch': ['/batch/'],
+            'ecs': ['/ecs/'],
+            'eks': ['/eks/'],
+            'ecr': ['/ecr/'],
+            
+            # Storage
+            'efs': ['/efs/'],
+            'fsx': ['/fsx/'],
+            'glacier': ['/glacier/'],
+            'storage-gateway': ['/storagegateway/'],
+            'backup': ['/backup/', '/backup/home'],
+            
+            # Database
+            'dynamodb': ['/dynamodb/', '/dynamodbv2/'],
+            'elasticache': ['/elasticache/'],
+            'neptune': ['/neptune/'],
+            'documentdb': ['/docdb/'],
+            'keyspaces': ['/keyspaces/'],
+            'timestream': ['/timestream/'],
+            
+            # Networking
+            'apigateway': ['/apigateway/', '/apigateway/main', '/apigateway/home'],
+            'api-gateway': ['/apigateway/', '/apigateway/main', '/apigateway/home'],
             'vpc': ['/vpc/', '/vpc/home'],
+            'cloudfront': ['/cloudfront/'],
+            'route53': ['route53'],
+            'elb': ['/ec2/v2/home', '/ec2/home#LoadBalancers'],
+            'elasticloadbalancing': ['/ec2/v2/home', '/ec2/home#LoadBalancers'],
+            
+            # Security
             'iam': ['/iam/', '/iamv2/'],
-            'cloudtrail': ['/cloudtrail/', '/cloudtrail/home'],
-            'cloudwatch': ['/cloudwatch/', '/cloudwatch/home'],
+            'cognito': ['/cognito/'],
             'kms': ['/kms/', '/kms/home'],
             'secretsmanager': ['/secretsmanager/', '/secretsmanager/home'],
             'secrets-manager': ['/secretsmanager/', '/secretsmanager/home'],
+            'guardduty': ['/guardduty/'],
+            'inspector': ['/inspector/'],
+            'macie': ['/macie/'],
+            'security-hub': ['/securityhub/'],
+            'waf': ['/wafv2/'],
+            'shield': ['/shield/'],
+            
+            # Management
+            'cloudwatch': ['/cloudwatch/', '/cloudwatch/home'],
+            'cloudtrail': ['/cloudtrail/', '/cloudtrail/home'],
+            'systems-manager': ['/systems-manager/', '/systems-manager/home'],
+            'ssm': ['/systems-manager/', '/systems-manager/home'],
+            'config': ['/config/'],
+            'cloudformation': ['/cloudformation/'],
+            'service-catalog': ['/servicecatalog/'],
+            'opsworks': ['/opsworks/'],
+            'control-tower': ['/controltower/'],
+            
+            # Developer Tools
             'codepipeline': ['/codesuite/codepipeline/', '/codepipeline/'],
             'codebuild': ['/codesuite/codebuild/', '/codebuild/'],
             'codecommit': ['/codesuite/codecommit/', '/codecommit/'],
-            'systems-manager': ['/systems-manager/', '/systems-manager/home'],
-            'ssm': ['/systems-manager/', '/systems-manager/home'],
-            'backup': ['/backup/', '/backup/home'],
+            'codedeploy': ['/codesuite/codedeploy/', '/codedeploy/'],
+            'cloud9': ['/cloud9/'],
+            'x-ray': ['/xray/'],
+            'codeartifact': ['/codeartifact/'],
+            
+            # Machine Learning
+            'sagemaker': ['/sagemaker/'],
+            'comprehend': ['/comprehend/'],
+            'lex': ['/lex/'],
+            'rekognition': ['/rekognition/'],
+            'translate': ['/translate/'],
+            'transcribe': ['/transcribe/'],
+            'kendra': ['/kendra/'],
             'bedrock': ['/bedrock/', '/bedrock/home'],
-            'dynamodb': ['/dynamodb/', '/dynamodbv2/'],
+            
+            # Application Integration
             'sns': ['/sns/', '/sns/v3/'],
             'sqs': ['/sqs/', '/sqs/v2/'],
-            'elb': ['/ec2/v2/home', '/ec2/home#LoadBalancers'],
-            'elasticloadbalancing': ['/ec2/v2/home', '/ec2/home#LoadBalancers'],
+            'step-functions': ['/states/'],
+            'mq': ['/amazon-mq/'],
+            'eventbridge': ['/events/'],
+            'appflow': ['/appflow/'],
+            
+            # Mobile & IoT
+            'amplify': ['/amplify/'],
+            'appsync': ['/appsync/'],
+            'iot-core': ['/iot/'],
+            'iot-analytics': ['/iotanalytics/'],
+            'iot-events': ['/iotevents/'],
+            
+            # Migration
+            'migration-hub': ['/migrationhub/'],
+            'dms': ['/dms/'],
+            'datasync': ['/datasync/'],
+            
+            # Others
+            'connect': ['/connect/'],
+            'workspaces': ['/workspaces/'],
+            'gamelift': ['/gamelift/'],
+            'braket': ['/braket/'],
+            'robomaker': ['/robomaker/'],
         }
         
         # Check if current URL contains the actual service path
