@@ -108,6 +108,9 @@ class AWSUniversalServiceNavigator:
         'route53': 'https://console.aws.amazon.com/route53/home',
         'cloudfront': 'https://console.aws.amazon.com/cloudfront/home',
         'waf': 'https://{region}.console.aws.amazon.com/wafv2/home?region={region}',
+        'codepipeline': 'https://{region}.console.aws.amazon.com/codesuite/codepipeline/pipelines?region={region}',
+        'codebuild': 'https://{region}.console.aws.amazon.com/codesuite/codebuild/projects?region={region}',
+        'codecommit': 'https://{region}.console.aws.amazon.com/codesuite/codecommit/repositories?region={region}',
     }
     
     def __init__(self, driver, region: str = "us-east-1"):
@@ -290,6 +293,9 @@ class AWSUniversalServiceNavigator:
             'kms': ['/kms/', '/kms/home'],
             'secretsmanager': ['/secretsmanager/', '/secretsmanager/home'],
             'secrets-manager': ['/secretsmanager/', '/secretsmanager/home'],
+            'codepipeline': ['/codesuite/codepipeline/', '/codepipeline/'],
+            'codebuild': ['/codesuite/codebuild/', '/codebuild/'],
+            'codecommit': ['/codesuite/codecommit/', '/codecommit/'],
             'systems-manager': ['/systems-manager/', '/systems-manager/home'],
             'ssm': ['/systems-manager/', '/systems-manager/home'],
             'backup': ['/backup/', '/backup/home'],
