@@ -950,6 +950,39 @@ IMPORTANT:
             }
         },
         {
+            "name": "web_search",
+            "description": """🌐 Search the web for real-time information.
+
+Use this when you need current information about:
+- AWS service behaviors (regional vs global, API limits, date fields)
+- Jira/Confluence API documentation  
+- Error messages and troubleshooting
+- Best practices for any tool/service
+- Current facts you're unsure about
+
+The search will check knowledge base first, then search the web if needed.
+Results are automatically learned and stored for future use.""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query (e.g., 'is AWS S3 regional or global service?')"
+                    },
+                    "focus_domains": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Preferred domains to search (e.g., ['docs.aws.amazon.com', 'atlassian.com'])"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default: 5)"
+                    }
+                },
+                "required": ["query"]
+            }
+        },
+        {
             "name": "analyze_past_evidence",
             "description": """📚 Analyze previous years' audit evidence to learn patterns and requirements.
 

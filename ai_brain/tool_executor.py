@@ -4,6 +4,7 @@ Tool Executor - Executes tools that Claude decides to call
 
 import os
 import time  # ← SELF-HEAL FIX: Added for time.sleep() calls
+import json
 from dataclasses import asdict
 from typing import Dict, Any, List, Optional
 import datetime as dt
@@ -30,18 +31,31 @@ from tools.aws_universal_export import (
 )
 from tools.aws_list_tool import (
     list_s3_buckets, list_rds_instances, list_rds_clusters,
-    list_iam_users, list_ec2_instances, list_lambda_functions, list_vpc_resources
+    list_iam_users, list_ec2_instances, list_lambda_functions,
+    list_kms_keys, list_vpc_resources
 )
 from tools.sharepoint_upload_tool import upload_to_sharepoint, batch_upload_from_rfi_folder
 from ai_brain.universal_intelligence import UniversalIntelligence
 from ai_brain.intelligent_tools import IntelligentFileExporter, IntelligentAWSCLI, IntelligentEvidenceCollector
 from ai_brain.orchestrator import AIOrchestrator
 from ai_brain.meta_intelligence import MetaIntelligence, MultiDimensionalCoordinator
+from ai_brain.service_catalog import ServiceCatalog
+from ai_brain.error_debugger import ErrorDebugger
+from ai_brain.enhancement_reviewer import EnhancementReviewer
+from ai_brain.navigation_intelligence import get_navigation_intelligence
+from ai_brain.execution_intelligence import get_execution_intelligence
 
 console = Console()
 
 
 class ToolExecutor:
+    DEFAULT_REGIONS = [
+        "us-east-1",
+        "us-west-2",
+        "eu-west-1",
+        "ap-northeast-1",
+        "ap-southeast-1"
+    ]
     """
     Executes tools that the LLM (Claude) decides to call
     NOW WITH AI ORCHESTRATOR - brain directs ALL tools from the start!
@@ -61,10 +75,20 @@ class ToolExecutor:
         self.multi_dim_coordinator = None
         self.current_request: Optional[str] = None
         self.advisor = None
+        self.enhancement_manager = None
         # Reusable AWS browser session (UniversalScreenshotEnhanced) for non-RDS services
         self._aws_universal_session = None
         self._aws_session_account = None
         self._aws_session_region = None
+        self.service_catalog = ServiceCatalog()
+        catalog_regions = self.service_catalog.get_domain_default_regions("aws")
+        if catalog_regions:
+            ToolExecutor.DEFAULT_REGIONS = catalog_regions
+        self.error_debugger = ErrorDebugger(llm)
+        self.enhancement_reviewer = None
+        self.navigation_intelligence = get_navigation_intelligence(llm)
+        self.execution_intelligence = get_execution_intelligence(llm)
+        self.navigation_intelligence = get_navigation_intelligence(llm)
         
         self.repo_root = Path(__file__).resolve().parents[1]
         playbook_dir = self.repo_root / "evidence_playbooks"
@@ -118,7 +142,9 @@ class ToolExecutor:
             self.multi_dim_coordinator = None
             self.playbook_builder = EvidencePlaybookBuilder(playbook_dir)
             self.playbook_replayer = EvidencePlaybookReplayer(self, self.playbook_builder, report_dir)
-            self.enhancement_manager = None
+
+        if llm and self.enhancement_manager:
+            self.enhancement_reviewer = EnhancementReviewer(self.enhancement_manager, llm)
     
     def set_current_request(self, request: str):
         """Track the latest user request for meta-intelligence context."""
@@ -146,6 +172,8 @@ class ToolExecutor:
 
         if isinstance(result, dict):
             self._notify_advisor_of_step(tool_name, tool_input, result)
+            if self.error_debugger:
+                self.error_debugger.analyze(tool_name, tool_input, result)
         return result
     
     def _execute_tool_direct(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
@@ -216,6 +244,9 @@ class ToolExecutor:
             elif tool_name == "apply_pending_enhancement":
                 return self._execute_apply_pending_enhancement(tool_input)
 
+            elif tool_name == "review_pending_enhancement":
+                return self._execute_review_pending_enhancement(tool_input)
+
             elif tool_name == "replay_evidence_playbook":
                 return self._execute_replay_evidence_playbook(tool_input)
 
@@ -224,6 +255,9 @@ class ToolExecutor:
             
             elif tool_name == "myid_export_access":
                 return self._execute_myid_export_access(tool_input)
+            
+            elif tool_name == "web_search":
+                return self._execute_web_search(tool_input)
             
             elif tool_name == "get_browser_screenshot":
                 return self._execute_browser_screenshot(tool_input)
@@ -321,6 +355,26 @@ class ToolExecutor:
                 "status": "error",
                 "error": str(e)
             }
+
+    def _execute_review_pending_enhancement(self, params: Dict) -> Dict:
+        """Run LLM review on a pending enhancement."""
+        if not self.enhancement_manager:
+            return {"status": "error", "error": "Enhancement manager unavailable"}
+        if not self.enhancement_reviewer:
+            return {"status": "error", "error": "Enhancement reviewer not available (LLM missing)."}
+        proposal_id = params.get("proposal_id")
+        if not proposal_id:
+            return {"status": "error", "error": "Missing proposal_id"}
+        review = self.enhancement_reviewer.review_proposal(proposal_id)
+        if not review:
+            return {"status": "error", "error": "Review failed or returned no content"}
+        return {
+            "status": "success",
+            "result": {
+                "proposal_id": proposal_id,
+                "review": review
+            }
+        }
     
     def _execute_sharepoint_review(self, params: Dict) -> Dict:
         """Execute SharePoint evidence review"""
@@ -450,7 +504,51 @@ class ToolExecutor:
         1. Navigation only (capture_screenshot=false)
         2. Navigation + Screenshot (capture_screenshot=true)
         3. Navigation + Export (export_format set)
+        Supports batching across multiple regions/tabs in one call.
         """
+        region_param = params.get("aws_region")
+        tab_param = params.get("config_tab")
+        region_list = (
+            [r.strip() for r in region_param if isinstance(r, str)]
+            if isinstance(region_param, (list, tuple, set))
+            else [region_param]
+        )
+        tab_list = (
+            [t for t in tab_param if t]
+            if isinstance(tab_param, (list, tuple, set))
+            else ([tab_param] if tab_param else [None])
+        )
+        
+        # If multiple regions or tabs requested, run sequentially
+        if len(region_list) > 1 or len(tab_list) > 1:
+            multi_results = []
+            failures = []
+            for region in region_list:
+                for tab in tab_list:
+                    sub_params = dict(params)
+                    sub_params["aws_region"] = region
+                    if tab:
+                        sub_params["config_tab"] = tab
+                    else:
+                        sub_params.pop("config_tab", None)
+                    result = self._aws_console_action_single(sub_params)
+                    target = {"region": region, "tab": tab or "N/A", "result": result}
+                    if result.get("status") == "success":
+                        multi_results.append(target)
+                    else:
+                        failures.append(target)
+            status = "success" if multi_results and not failures else ("partial_success" if multi_results else "error")
+            return {
+                "status": status,
+                "result": {
+                    "runs": multi_results,
+                    "failures": failures
+                }
+            }
+        
+        return self._aws_console_action_single(params)
+    
+    def _aws_console_action_single(self, params: Dict) -> Dict:
         # Check what action is requested
         capture_screenshot = params.get("capture_screenshot", False)
         export_format = params.get("export_format", "")
@@ -466,6 +564,8 @@ class ToolExecutor:
         account = params.get("aws_account")
         region = params.get("aws_region")
         section_name = params.get("section_name")
+        role_name = params.get("aws_role") or params.get("role_name")
+        role_name = params.get("aws_role") or params.get("role_name")
         
         console.print(f"   Service: {service.upper()}")
         console.print(f"   Account: {account}")
@@ -476,7 +576,7 @@ class ToolExecutor:
         try:
             # Authenticate to AWS account using BrowserSessionManager
             # Note: authenticate_aws takes region as second parameter
-            if not BrowserSessionManager.authenticate_aws(account, region):
+            if not BrowserSessionManager.authenticate_aws(account, region, role_name=role_name):
                 return {
                     "status": "error",
                     "error": f"Failed to authenticate to AWS account: {account}"
@@ -608,17 +708,17 @@ class ToolExecutor:
                 }
             
             # Authenticate to AWS
-            if not browser.authenticate_aws(account):
+            if not BrowserSessionManager.authenticate_aws(account, region, role_name=role_name):
                 return {
                     "status": "error",
                     "error": f"Failed to authenticate to AWS account: {account}"
                 }
             
             # Change region if needed
-            current_region = browser.get_current_region()
+            current_region = BrowserSessionManager._current_region
             if current_region != region:
                 console.print(f"[cyan]🌍 Switching region: {current_region} → {region}[/cyan]")
-                if not browser.change_region(region):
+                if not BrowserSessionManager.change_region(region):
                     console.print(f"[yellow]⚠️  Region switch may have failed, continuing...[/yellow]")
             
             # Get universal navigator
@@ -696,7 +796,7 @@ class ToolExecutor:
             resource_name = params.get('resource_name', '')
             resource_type = params.get('resource_type', '')
             config_tab = params.get('config_tab', '')
-            rfi_code = params.get('rfi_code', 'unknown')
+            rfi_code = params.get('rfi_code') or params.get('evidence_folder') or "AWS-CONSOLE"
             role_name = params.get('aws_role') or params.get('role_name')
             profile_name = params.get('aws_profile') or params.get('profile')
             
@@ -757,7 +857,7 @@ class ToolExecutor:
                     }
                 
                 # Authenticate to AWS (only if not already authenticated)
-                if not BrowserSessionManager.authenticate_aws(account=account, region=region):
+                if not BrowserSessionManager.authenticate_aws(account=account, region=region, role_name=role_name):
                     return {
                         "status": "error",
                         "error": "Failed to authenticate to AWS"
@@ -794,73 +894,111 @@ class ToolExecutor:
                             name=filename.replace('.png', '')
                         )
                 else:
-                    # For all other services, use DIRECT URL navigation
-                    console.print(f"[cyan]📸 Capturing {service.upper()} screenshot (DIRECT URL NAVIGATION!)[/cyan]")
+                    # For all other services, use INTELLIGENT NAVIGATION
+                    console.print(f"[cyan]📸 Capturing {service.upper()} screenshot with Navigation Intelligence[/cyan]")
                     
-                    # Build direct URL to service console
-                    service_urls = {
-                        's3': f'https://s3.console.aws.amazon.com/s3/buckets?region={region}',
-                        'ec2': f'https://{region}.console.aws.amazon.com/ec2/home?region={region}#Instances:',
-                        'lambda': f'https://{region}.console.aws.amazon.com/lambda/home?region={region}#/functions',
-                        'iam': f'https://console.aws.amazon.com/iam/home#/users',
-                        'cloudwatch': f'https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}',
-                        'dynamodb': f'https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}#tables',
-                        'sns': f'https://{region}.console.aws.amazon.com/sns/v3/home?region={region}#/topics',
-                        'sqs': f'https://{region}.console.aws.amazon.com/sqs/v2/home?region={region}#/queues',
-                    }
+                    # Try to get navigation instructions (cache or LLM)
+                    nav_target = resource_type or section_name or service
+                    nav_instructions = None
                     
-                    service_url = service_urls.get(service.lower())
-                    if service_url:
-                        console.print(f"[cyan]🔗 Navigating directly to {service.upper()} console...[/cyan]")
-                        browser.navigate_to_url(service_url)
-                        time.sleep(3)  # Wait for page load
+                    # Check if we need specialized navigation (not just the service homepage)
+                    needs_specialized_nav = bool(resource_type or section_name)
+                    
+                    if needs_specialized_nav:
+                        console.print(f"[cyan]🧠 Checking navigation knowledge for: {service}/{nav_target}[/cyan]")
+                        nav_instructions = self.navigation_intelligence.learn_navigation_path(
+                            platform="aws",
+                            service=service,
+                            target=nav_target,
+                            user_request=self.current_request or f"Screenshot {service} {nav_target}",
+                            current_url=browser.driver.current_url if browser.driver else None,
+                            page_context=None
+                        )
+                    
+                    # If LLM provided instructions, use them
+                    if nav_instructions and nav_instructions.get('url'):
+                        learned_url = nav_instructions['url']
+                        console.print(f"[green]🧠 Using LLM-learned navigation: {learned_url}[/green]")
+                        browser.navigate_to_url(learned_url)
+                        time.sleep(3)
                     else:
-                        # Use UNIVERSAL NAVIGATOR for ALL other services!
-                        console.print(f"[yellow]🔍 Using Universal Navigator for {service.upper()}...[/yellow]")
-                        universal_nav = BrowserSessionManager.get_universal_navigator()
-                        if universal_nav:
-                            # Navigate to service (works for ANY service!)
-                            if not universal_nav.navigate_to_service(service, use_search=True):
-                                console.print(f"[red]❌ Failed to navigate to {service}[/red]")
+                        # Fallback to static URL map
+                        resource_type_lower = (resource_type or "").lower().replace("_", "-").replace(" ", "-")
+                        
+                        # IAM sub-page routing based on resource_type
+                        iam_url = f'https://console.aws.amazon.com/iam/home#/users'  # default
+                        if 'identity' in resource_type_lower and 'provider' in resource_type_lower:
+                            iam_url = f'https://console.aws.amazon.com/iam/home#/identity_providers'
+                        elif 'role' in resource_type_lower:
+                            iam_url = f'https://console.aws.amazon.com/iam/home#/roles'
+                        elif 'polic' in resource_type_lower:
+                            iam_url = f'https://console.aws.amazon.com/iam/home#/policies'
+                        elif 'group' in resource_type_lower:
+                            iam_url = f'https://console.aws.amazon.com/iam/home#/groups'
+                        
+                        service_urls = {
+                            's3': f'https://s3.console.aws.amazon.com/s3/buckets?region={region}',
+                            'ec2': f'https://{region}.console.aws.amazon.com/ec2/home?region={region}#Instances:',
+                            'lambda': f'https://{region}.console.aws.amazon.com/lambda/home?region={region}#/functions',
+                            'iam': iam_url,
+                            'cloudwatch': f'https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}',
+                            'dynamodb': f'https://{region}.console.aws.amazon.com/dynamodbv2/home?region={region}#tables',
+                            'sns': f'https://{region}.console.aws.amazon.com/sns/v3/home?region={region}#/topics',
+                            'sqs': f'https://{region}.console.aws.amazon.com/sqs/v2/home?region={region}#/queues',
+                        }
+                        
+                        service_url = service_urls.get(service.lower())
+                        if service_url:
+                            console.print(f"[cyan]🔗 Navigating to {service.upper()} console (static map)...[/cyan]")
+                            browser.navigate_to_url(service_url)
+                            time.sleep(3)  # Wait for page load
+                        else:
+                            # Use UNIVERSAL NAVIGATOR for ALL other services!
+                            console.print(f"[yellow]🔍 Using Universal Navigator for {service.upper()}...[/yellow]")
+                            universal_nav = BrowserSessionManager.get_universal_navigator()
+                            if universal_nav:
+                                # Navigate to service (works for ANY service!)
+                                if not universal_nav.navigate_to_service(service, use_search=True):
+                                    console.print(f"[red]❌ Failed to navigate to {service}[/red]")
+                                    return {
+                                        "status": "error",
+                                        "error": f"Failed to navigate to {service}"
+                                    }
+                                
+                                # NEW: Navigate to specific section if specified
+                                if section_name:
+                                    console.print(f"[cyan]🧭 Navigating to section: '{section_name}'...[/cyan]")
+                                    section_success = universal_nav.navigate_to_section(
+                                        section_name=section_name,
+                                        click_first_resource=select_first_resource,
+                                        resource_name=resource_name,
+                                        resource_index=resource_index
+                                    )
+                                    
+                                    if section_success:
+                                        console.print(f"[green]✅ Navigated to section: {section_name}[/green]")
+                                        time.sleep(3)  # Extra wait for section content to load
+                                    else:
+                                        console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
+                                        console.print(f"[yellow]   Current URL: {browser.driver.current_url}[/yellow]")
+                                        
+                                        # Verify we're still on the service (not back on homepage)
+                                        current_url = browser.driver.current_url
+                                        if '/console/home' in current_url or service.lower() not in current_url.lower():
+                                            console.print(f"[red]❌ Navigated away from {service}! Attempting to recover...[/red]")
+                                            # Try to navigate back to the service
+                                            if not universal_nav.navigate_to_service(service, use_search=True):
+                                                return {
+                                                    "status": "error",
+                                                    "error": f"Lost navigation to {service} and could not recover"
+                                                }
+                                            time.sleep(2)
+                            else:
+                                console.print(f"[red]❌ Universal navigator not available[/red]")
                                 return {
                                     "status": "error",
-                                    "error": f"Failed to navigate to {service}"
+                                    "error": "Universal navigator not available"
                                 }
-                            
-                            # NEW: Navigate to specific section if specified
-                            if section_name:
-                                console.print(f"[cyan]🧭 Navigating to section: '{section_name}'...[/cyan]")
-                                section_success = universal_nav.navigate_to_section(
-                                    section_name=section_name,
-                                    click_first_resource=select_first_resource,
-                                    resource_name=resource_name,
-                                    resource_index=resource_index
-                                )
-                                
-                                if section_success:
-                                    console.print(f"[green]✅ Navigated to section: {section_name}[/green]")
-                                    time.sleep(3)  # Extra wait for section content to load
-                                else:
-                                    console.print(f"[yellow]⚠️  Failed to navigate to section '{section_name}'[/yellow]")
-                                    console.print(f"[yellow]   Current URL: {browser.driver.current_url}[/yellow]")
-                                    
-                                    # Verify we're still on the service (not back on homepage)
-                                    current_url = browser.driver.current_url
-                                    if '/console/home' in current_url or service.lower() not in current_url.lower():
-                                        console.print(f"[red]❌ Navigated away from {service}! Attempting to recover...[/red]")
-                                        # Try to navigate back to the service
-                                        if not universal_nav.navigate_to_service(service, use_search=True):
-                                            return {
-                                                "status": "error",
-                                                "error": f"Lost navigation to {service} and could not recover"
-                                            }
-                                        time.sleep(2)
-                        else:
-                            console.print(f"[red]❌ Universal navigator not available[/red]")
-                            return {
-                                "status": "error",
-                                "error": "Universal navigator not available"
-                            }
 
                     # Navigate to specific resource if specified (and section_name not used)
                     if resource_name and not section_name:
@@ -1155,20 +1293,33 @@ class ToolExecutor:
     def _execute_aws_export(self, params: Dict) -> Dict:
         """Execute AWS data export (supports multi-region)."""
         try:
-            service = params.get('service')
-            export_type = params.get('export_type')
+            service_input = params.get('service')
+            service_list = self._normalize_service_input(service_input)
+            if not service_list and isinstance(service_input, str) and service_input.strip():
+                service_list = [service_input]
+            normalized_services: List[str] = []
+            for svc in service_list:
+                canonical = self._ensure_service_catalog_entry(svc)
+                canonical = (canonical or svc or "").strip().lower()
+                if canonical and canonical not in normalized_services:
+                    normalized_services.append(canonical)
+            services_to_process = normalized_services
+            user_export_type = params.get('export_type')
             format_type = params.get('format', 'csv')
             account = params.get('aws_account')
             region_input = params.get('aws_region')
             rfi_code = params.get('rfi_code', 'unknown')
             
-            if not all([service, export_type, account, region_input]):
+            if not services_to_process or not all([account, region_input]):
                 return {
                     "status": "error",
-                    "error": "Missing required parameters: service, export_type, aws_account, aws_region"
+                    "error": "Missing required parameters: service, aws_account, aws_region"
                 }
+            primary_service = services_to_process[0]
             
             region_list = self._normalize_region_input(region_input)
+            if not region_list:
+                region_list = self.service_catalog.get_domain_default_regions("aws") or self.DEFAULT_REGIONS
             if not region_list:
                 return {
                     "status": "error",
@@ -1197,100 +1348,184 @@ class ToolExecutor:
             
             successes = []
             failures = []
+            domain_default_regions = self.service_catalog.get_domain_default_regions("aws") or self.DEFAULT_REGIONS
+            completed_exports = set()
             
-            for region in region_list:
-                target_dir = rfi_dir / f"{service}_{export_type}_{region}_{timestamp}"
-                target_dir.mkdir(parents=True, exist_ok=True)
-                filename = f"{service}_{export_type}_{region}_{timestamp}.{format_type}"
-                output_path = str(target_dir / filename)
-                pre_existing = {p.name for p in rfi_dir.iterdir() if p.is_file()}
+            for svc in services_to_process:
+                current_service = str(svc).strip()
+                if not current_service:
+                    continue
+                service_info = self.service_catalog.get_service("aws", current_service)
+                service_display = (service_info or {}).get("display_name", current_service.upper())
+                service_scope = (service_info or {}).get("scope", "regional").lower()
+                service_specific_regions = list(region_list)
+                if service_scope == "global":
+                    preferred_region = (
+                        (service_info or {}).get("preferred_region")
+                        or (service_specific_regions[0] if service_specific_regions else None)
+                        or (domain_default_regions[0] if domain_default_regions else None)
+                    )
+                    service_specific_regions = [preferred_region] if preferred_region else []
+                elif not service_specific_regions:
+                    service_specific_regions = (
+                        (service_info or {}).get("default_regions")
+                        or domain_default_regions
+                    )
+                if not service_specific_regions:
+                    service_specific_regions = self.DEFAULT_REGIONS
                 
-                console.print(f"\n[cyan]📊 Exporting AWS data...[/cyan]")
-                console.print(f"[cyan]   Service: {service.upper()}[/cyan]")
-                console.print(f"[cyan]   Export Type: {export_type}[/cyan]")
-                console.print(f"[cyan]   Account: {account}[/cyan]")
-                console.print(f"[cyan]   Region: {region}[/cyan]")
-                console.print(f"[cyan]   Format: {format_type.upper()}[/cyan]")
-                console.print(f"[cyan]   Output: {filename}[/cyan]\n")
-                if filter_by_date:
-                    console.print(f"[cyan]   Date Filter: {audit_period or f'{start_date} to {end_date}'}[/cyan]")
-                
-                export_result = export_aws_data(
-                    service=service,
-                    export_type=export_type,
-                    format=format_type,
-                    aws_account=account,
-                    aws_region=region,
-                    output_path=output_path,
-                    filter_by_date=filter_by_date,
-                    audit_period=audit_period,
-                    start_date=start_date,
-                    end_date=end_date,
-                    date_field=date_field
+                effective_export_type = (
+                    user_export_type
+                    or (service_info or {}).get("default_export_type")
+                    or self._default_export_type_for_service(current_service)
+                    or "all"
                 )
                 
-                success = False
-                new_files: List[str] = []
-                error_message = "Data export failed. Check output for details."
-                if isinstance(export_result, dict):
-                    success = export_result.get("success", False)
-                    new_files.extend(export_result.get("files", []))
-                    error_message = export_result.get("message", error_message)
-                else:
-                    success = bool(export_result)
-                
-                if success:
-                    discovered = [
-                        str(p)
-                        for p in target_dir.iterdir()
-                        if p.is_file()
-                    ]
-                    for file_path in discovered:
-                        if file_path not in new_files:
-                            new_files.append(file_path)
-                
-                if success and new_files:
-                    saved_files = []
-                    for file_path in new_files:
-                        try:
-                            with open(file_path, 'rb') as f:
-                                file_content = f.read()
-                            saved, saved_path, _ = self.evidence_manager.save_evidence(
-                                file_content=file_content,
-                                file_name=Path(file_path).name,
-                                rfi_code=rfi_code
-                            )
-                            if saved:
-                                saved_files.append(saved_path)
-                            try:
-                                Path(file_path).unlink()
-                            except OSError:
-                                pass
-                        except Exception as save_err:
-                            console.print(f"[red]❌ Failed to store evidence {file_path}: {save_err}[/red]")
+                for region in service_specific_regions:
+                    export_key = (
+                        current_service,
+                        region,
+                        effective_export_type,
+                        format_type,
+                        audit_period or f"{start_date}:{end_date}"
+                    )
+                    if export_key in completed_exports:
+                        console.print(f"[yellow]ℹ️  Skipping duplicate export for {current_service}@{region} ({effective_export_type}).[/yellow]")
+                        continue
+                    target_dir = rfi_dir / f"{current_service}_{effective_export_type}_{region}_{timestamp}"
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    filename = f"{current_service}_{effective_export_type}_{region}_{timestamp}.{format_type}"
+                    output_path = str(target_dir / filename)
+                    
+                    console.print(f"\n[cyan]📊 Exporting AWS data...[/cyan]")
+                    console.print(f"[cyan]   Service: {service_display}[/cyan]")
+                    console.print(f"[cyan]   Export Type: {effective_export_type}[/cyan]")
+                    console.print(f"[cyan]   Account: {account}[/cyan]")
+                    console.print(f"[cyan]   Region: {region}[/cyan]")
+                    console.print(f"[cyan]   Format: {format_type.upper()}[/cyan]")
+                    console.print(f"[cyan]   Output: {filename}[/cyan]\n")
+                    if filter_by_date:
+                        console.print(f"[cyan]   Date Filter: {audit_period or f'{start_date} to {end_date}'}[/cyan]")
+                    
                     try:
-                        if not any(target_dir.iterdir()):
-                            target_dir.rmdir()
-                    except OSError:
-                        pass
-                    successes.append({
-                        "region": region,
-                        "files": saved_files,
-                        "timestamp": timestamp
-                    })
-                else:
-                    failures.append({
-                        "region": region,
-                        "error": error_message
-                    })
+                        export_result = export_aws_data(
+                            service=current_service,
+                            export_type=effective_export_type,
+                            format=format_type,
+                            aws_account=account,
+                            aws_region=region,
+                            output_path=output_path,
+                            filter_by_date=filter_by_date,
+                            audit_period=audit_period,
+                            start_date=start_date,
+                            end_date=end_date,
+                            date_field=date_field
+                        )
+                    except Exception as exc:
+                        error_message = str(exc)
+                        console.print(f"[red]❌ Export raised exception for {current_service}@{region}: {error_message}[/red]")
+                        failures.append({
+                            "service": current_service,
+                            "service_display": service_display,
+                            "region": region,
+                            "error": error_message
+                        })
+                        continue
+                    
+                    success = False
+                    new_files: List[str] = []
+                    error_message = "Data export failed. Check output for details."
+                    zero_records = False
+                    filter_stats = None
+                    records_kept = None
+                    records_total = None
+                    message_text = error_message
+                    
+                    if isinstance(export_result, dict):
+                        success = export_result.get("success", False)
+                        new_files.extend(export_result.get("files", []))
+                        error_message = export_result.get("message", error_message)
+                        message_text = error_message
+                        zero_records = export_result.get("zero_records", False)
+                        filter_stats = export_result.get("filter_stats")
+                        records_kept = export_result.get("records_kept")
+                        records_total = export_result.get("records_total")
+                    else:
+                        success = bool(export_result)
+                        if success:
+                            message_text = "Export completed successfully"
+                    
+                    if success:
+                        discovered = [
+                            str(p)
+                            for p in target_dir.iterdir()
+                            if p.is_file()
+                        ]
+                        for file_path in discovered:
+                            if file_path not in new_files:
+                                new_files.append(file_path)
+                    
+                    saved_files: List[str] = []
+                    if success and new_files:
+                        for file_path in new_files:
+                            try:
+                                with open(file_path, 'rb') as f:
+                                    file_content = f.read()
+                                saved, saved_path, _ = self.evidence_manager.save_evidence(
+                                    file_content=file_content,
+                                    file_name=Path(file_path).name,
+                                    rfi_code=rfi_code
+                                )
+                                if saved and saved_path:
+                                    saved_files.append(saved_path)
+                                try:
+                                    Path(file_path).unlink()
+                                except OSError:
+                                    pass
+                            except Exception as save_err:
+                                console.print(f"[red]❌ Failed to store evidence {file_path}: {save_err}[/red]")
+                        try:
+                            if not any(target_dir.iterdir()):
+                                target_dir.rmdir()
+                        except OSError:
+                            pass
+                    
+                    if success and (saved_files or zero_records):
+                        entry = {
+                            "service": current_service,
+                            "service_display": service_display,
+                            "export_type": effective_export_type,
+                            "region": region,
+                            "files": saved_files,
+                            "timestamp": timestamp,
+                            "message": message_text,
+                            "records_kept": records_kept,
+                            "records_total": records_total,
+                            "zero_records": zero_records,
+                            "filter_stats": filter_stats,
+                            "date_filter": audit_period or (f"{start_date} to {end_date}" if start_date and end_date else None)
+                        }
+                        if zero_records and not saved_files:
+                            console.print(f"[yellow]ℹ️  {service_display} {effective_export_type} returned zero records in {region} (filters applied).[/yellow]")
+                        successes.append(entry)
+                        completed_exports.add(export_key)
+                    else:
+                        failures.append({
+                            "service": current_service,
+                            "service_display": service_display,
+                            "export_type": effective_export_type,
+                            "region": region,
+                            "error": error_message
+                        })
             
             if successes:
                 return {
                     "status": "success",
                     "result": {
-                        "message": f"Data exported for {len(successes)} region(s)",
-                        "service": service,
-                        "export_type": export_type,
+                        "message": f"Data exported for {len(successes)} service/region combinations",
+                        "service": primary_service,
+                        "services": services_to_process,
+                        "export_type": user_export_type or "service-default",
                         "format": format_type,
                         "exports": successes,
                         "failures": failures
@@ -1299,7 +1534,7 @@ class ToolExecutor:
             
             return {
                 "status": "error",
-                "error": "; ".join(f"{f['region']}: {f['error']}" for f in failures) or "Export failed for all regions."
+                "error": "; ".join(f"{f['service']}@{f['region']}: {f['error']}" for f in failures) or "Export failed for all regions."
             }
         
         except Exception as e:
@@ -1316,7 +1551,11 @@ class ToolExecutor:
         try:
             service = params.get('service')
             account = params.get('aws_account')
-            region = params.get('aws_region', 'us-east-1')
+            raw_region = params.get('aws_region') or params.get('aws_regions')
+            if isinstance(raw_region, (list, tuple, set)):
+                region = str(raw_region[0]) if raw_region else 'us-east-1'
+            else:
+                region = raw_region or 'us-east-1'
             
             if not all([service, account]):
                 return {
@@ -1349,6 +1588,8 @@ class ToolExecutor:
                 result = list_ec2_instances(account, region)
             elif service == 'lambda':
                 result = list_lambda_functions(account, region)
+            elif service == 'kms':
+                result = list_kms_keys(account, region)
             elif service == 'vpc':
                 result = list_vpc_resources(account, region)
             else:
@@ -1388,7 +1629,23 @@ class ToolExecutor:
             region_list = [str(item).strip() for item in region_input if str(item).strip()]
         else:
             region_list = []
-        return region_list
+        normalized = []
+        for region in region_list:
+            value = region.lower()
+            if value in {"all", "any"}:
+                normalized.extend(ToolExecutor.DEFAULT_REGIONS)
+            elif value in {"global", "none"}:
+                continue
+            else:
+                normalized.append(region)
+        # Deduplicate while preserving order
+        seen = set()
+        deduped = []
+        for region in normalized:
+            if region not in seen:
+                deduped.append(region)
+                seen.add(region)
+        return deduped
 
     @staticmethod
     def _normalize_service_input(services_input: Any) -> List[str]:
@@ -1419,6 +1676,91 @@ class ToolExecutor:
             "dynamodb": "tables"
         }
         return defaults.get(service)
+
+    def _ensure_service_catalog_entry(self, service_name: str) -> str:
+        """Ensure a service exists in the catalog, learning it via LLM if needed."""
+        candidate = (service_name or "").strip()
+        canonical = self.service_catalog.resolve_service_name("aws", candidate) if candidate else candidate
+        info = self.service_catalog.get_service("aws", canonical)
+        if info:
+            return canonical
+        learned = self._learn_service_from_llm(candidate)
+        if learned:
+            key = canonical or candidate.lower()
+            if key:
+                self.service_catalog.set_service("aws", key, learned)
+                console.print(f"[green]ℹ️  Learned service profile for {key} from LLM.[/green]")
+                return key
+        return canonical or candidate
+
+    def _learn_service_from_llm(self, service_name: str) -> Optional[Dict[str, Any]]:
+        """Ask the configured LLM for service metadata."""
+        if not self.llm or not service_name:
+            return None
+        prompt = f"""
+You are a cloud operations expert.
+Provide metadata for the AWS service named "{service_name}" in JSON with the following keys:
+display_name (string),
+scope ("global" or "regional"),
+preferred_region (string or null),
+default_regions (array of region names),
+default_export_type (string),
+aliases (array of alternative names),
+date_fields (object mapping resource types to creation date field names).
+Only return JSON, no prose.
+"""
+        try:
+            response = self.llm.invoke(prompt).strip()
+        except Exception as exc:
+            console.print(f"[red]⚠️  LLM lookup failed for {service_name}: {exc}[/red]")
+            return None
+        json_payload = self._extract_json_snippet(response)
+        if not json_payload:
+            return None
+        try:
+            data = json.loads(json_payload)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        # Normalize fields
+        data.setdefault("display_name", service_name.title())
+        scope = data.get("scope", "regional").lower()
+        data["scope"] = scope if scope in {"global", "regional"} else "regional"
+        if data["scope"] == "global":
+            pref = data.get("preferred_region")
+            if not pref:
+                data["preferred_region"] = "us-east-1"
+        default_regions = data.get("default_regions")
+        if not isinstance(default_regions, list) or not default_regions:
+            data["default_regions"] = self.service_catalog.get_domain_default_regions("aws") or self.DEFAULT_REGIONS
+        aliases = data.get("aliases")
+        if not isinstance(aliases, list):
+            data["aliases"] = []
+        date_fields = data.get("date_fields")
+        if not isinstance(date_fields, dict):
+            data["date_fields"] = {}
+        return data
+
+    @staticmethod
+    def _extract_json_snippet(text: str) -> Optional[str]:
+        """Extract JSON object from an LLM response."""
+        if not text:
+            return None
+        if "```" in text:
+            parts = text.split("```")
+            for part in parts:
+                stripped = part.strip()
+                if stripped.startswith("{") and stripped.endswith("}"):
+                    return stripped
+        stripped = text.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            return stripped
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return stripped[start:end+1]
+        return None
     
     def _execute_show_evidence(self, params: Dict) -> Dict:
         """Show local evidence summary"""
@@ -1923,6 +2265,39 @@ class ToolExecutor:
             console.print(f"[red]❌ MyID export failed: {e}[/red]")
             return {"status": "error", "error": str(e)}
     
+    def _execute_web_search(self, params: Dict) -> Dict:
+        """Execute web search for real-time knowledge."""
+        try:
+            from ai_brain.web_search_tool import web_search
+            
+            query = params.get("query")
+            if not query:
+                return {"status": "error", "error": "Missing query parameter"}
+            
+            result = web_search(
+                query=query,
+                focus_domains=params.get("focus_domains"),
+                max_results=params.get("max_results", 5)
+            )
+            
+            if result.get("success"):
+                return {
+                    "status": "success",
+                    "result": {
+                        "answer": result.get("answer"),
+                        "sources": result.get("sources", []),
+                        "results": result.get("results", [])
+                    }
+                }
+            else:
+                return {
+                    "status": "error",
+                    "error": result.get("error", "Search failed")
+                }
+        except Exception as e:
+            console.print(f"[red]❌ Web search failed: {e}[/red]")
+            return {"status": "error", "error": str(e)}
+    
     def _execute_browser_screenshot(self, params: Dict) -> Dict:
         """Execute get_browser_screenshot - Capture browser state for debugging"""
         from ai_brain.self_healing_tools import capture_browser_debug_screenshot
@@ -2342,7 +2717,8 @@ class ToolExecutor:
                 space=params.get('space'),
                 filter_id=params.get('filter_id')
             )
-            analytics = self._summarize_jira_tickets(tickets)
+            tickets_full = jira.get_last_full_tickets() or tickets
+            analytics = self._summarize_jira_tickets(tickets_full)
             
             # Prevent HUGE payloads from overwhelming the LLM
             MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 300)
@@ -2359,8 +2735,8 @@ class ToolExecutor:
             # Export if requested
             export_format = params.get('export_format')
             export_path = ""
-            if export_format and tickets:
-                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=rfi_code)
+            if export_format and tickets_full:
+                export_path = jira.export_tickets(tickets_full, output_format=export_format, rfi_code=rfi_code)
             
             total_tickets = len(tickets)
             visible_count = len(tickets_for_response)
@@ -2467,13 +2843,14 @@ class ToolExecutor:
                 filter_id=params.get('filter_id')
             )
             
-            analytics = self._summarize_jira_tickets(tickets)
+            tickets_full = jira.get_last_full_tickets() or tickets
+            analytics = self._summarize_jira_tickets(tickets_full)
             
             # Optionally export full results
             export_format = params.get('export_format')
             export_path = ""
-            if export_format and tickets:
-                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=rfi_code)
+            if export_format and tickets_full:
+                export_path = jira.export_tickets(tickets_full, output_format=export_format, rfi_code=rfi_code)
             
             # For LLM safety, reuse jira_search_jql truncation rules
             MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 300)
@@ -2533,10 +2910,11 @@ class ToolExecutor:
             if summary.get("error"):
                 return {"status": "error", "error": summary["error"]}
 
+            tickets_full = jira.get_last_full_tickets() or tickets
             export_format = params.get("export_format")
             export_path = ""
-            if export_format and tickets:
-                export_path = jira.export_tickets(tickets, output_format=export_format, rfi_code=params.get("rfi_code"))
+            if export_format and tickets_full:
+                export_path = jira.export_tickets(tickets_full, output_format=export_format, rfi_code=params.get("rfi_code"))
 
             MAX_TICKETS_FOR_RESPONSE = params.get('llm_ticket_limit', 200)
             truncated = False
@@ -2550,7 +2928,7 @@ class ToolExecutor:
                 "result": {
                     "summary": summary,
                     "tickets": tickets_for_response,
-                    "total_tickets": len(tickets),
+                    "total_tickets": len(tickets_full),
                     "truncated": truncated,
                     "export_path": export_path
                 }

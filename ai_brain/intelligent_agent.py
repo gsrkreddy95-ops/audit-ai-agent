@@ -59,6 +59,16 @@ class IntelligentAgent:
         self.persistent_history = ConversationHistory(max_exchanges=max_history)
         self.advisor = None
         
+        # Initialize Autonomous Brain (LLM-first architecture)
+        autonomous_mode = os.getenv('AUTONOMOUS_BRAIN_ENABLED', 'true').lower() == 'true'
+        if autonomous_mode:
+            from ai_brain.autonomous_brain import AutonomousBrain
+            self.autonomous_brain = AutonomousBrain(self.llm, self.tool_executor)
+            console.print("[bold magenta]🧠 Autonomous Brain Mode: ENABLED[/bold magenta]")
+        else:
+            self.autonomous_brain = None
+            console.print("[yellow]🧠 Autonomous Brain Mode: DISABLED (using legacy flow)[/yellow]")
+        
         console.print(f"[green]✅ Ready![/green]")
         console.print(f"[dim]Evidence: {self.evidence_manager.evidence_dir}[/dim]")
         console.print(f"[dim]Tools: {len(self.tools)} available[/dim]\n")
@@ -92,8 +102,20 @@ class IntelligentAgent:
             if hasattr(self, "tool_executor") and self.tool_executor:
                 self.tool_executor.set_current_request(user_input)
             
-            # Let Claude process and decide
-            response = self._process_with_tools()
+            # Route through Autonomous Brain if enabled
+            if hasattr(self, 'autonomous_brain') and self.autonomous_brain:
+                # Use autonomous brain for analysis + planning
+                # Brain will search web, plan, and orchestrate execution
+                brain_result = self.autonomous_brain.process_request(user_input, self.conversation_history)
+                
+                # If brain delegates back to Claude, continue with normal flow
+                if isinstance(brain_result, dict) and brain_result.get("delegate_to_claude"):
+                    response = self._process_with_tools()
+                else:
+                    response = brain_result if isinstance(brain_result, str) else brain_result.get("response", "Task completed")
+            else:
+                # Legacy mode: Let Claude process and decide
+                response = self._process_with_tools()
             
             # Add assistant response to history
             self.conversation_history.append({
