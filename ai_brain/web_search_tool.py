@@ -186,40 +186,46 @@ class WebSearchTool:
     
     def _search_duckduckgo(self, query: str, max_results: int) -> Dict[str, Any]:
         """Fallback search using DuckDuckGo (no API key required)"""
+        import warnings
+        
         try:
-            # Try new package name first (ddgs)
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                # Fallback to old package name for compatibility
-                from duckduckgo_search import DDGS
-            
-            ddgs = DDGS()
-            results = []
-            
-            # Get search results
-            search_results = ddgs.text(query, max_results=max_results)
-            
-            for item in search_results:
-                results.append({
-                    "title": item.get("title", ""),
-                    "url": item.get("href", ""),
-                    "snippet": item.get("body", ""),
-                    "relevance": 0.5  # DDG doesn't provide scores
-                })
-            
-            # Synthesize answer from top results
-            snippets = [r["snippet"] for r in results[:3]]
-            answer = "\n\n".join(snippets) if snippets else "No answer found"
-            
-            return {
-                "success": True,
-                "query": query,
-                "answer": answer,
-                "results": results,
-                "sources": [r["url"] for r in results],
-                "backend": "duckduckgo"
-            }
+            # Suppress all RuntimeWarnings during DDGS usage
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                
+                # Try new package name first (ddgs)
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    # Fallback to old package name for compatibility
+                    from duckduckgo_search import DDGS
+                
+                ddgs = DDGS()
+                results = []
+                
+                # Get search results (within warning suppression context)
+                search_results = ddgs.text(query, max_results=max_results)
+                
+                for item in search_results:
+                    results.append({
+                        "title": item.get("title", ""),
+                        "url": item.get("href", ""),
+                        "snippet": item.get("body", ""),
+                        "relevance": 0.5  # DDG doesn't provide scores
+                    })
+                
+                # Synthesize answer from top results
+                snippets = [r["snippet"] for r in results[:3]]
+                answer = "\n\n".join(snippets) if snippets else "No answer found"
+                
+                return {
+                    "success": True,
+                    "query": query,
+                    "answer": answer,
+                    "results": results,
+                    "sources": [r["url"] for r in results],
+                    "backend": "duckduckgo"
+                }
         except ImportError:
             console.print("[yellow]⚠️  DuckDuckGo search requires: pip install ddgs[/yellow]")
             console.print("[dim]   (or pip install duckduckgo-search for legacy support)[/dim]")

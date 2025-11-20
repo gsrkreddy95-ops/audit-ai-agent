@@ -212,71 +212,53 @@ Focus on extracting ALL details from the request."""
     
     def _enrich_with_knowledge(self, analysis: Dict[str, Any], user_request: str = "") -> Dict[str, Any]:
         """
-        Phase 2: Answer questions using knowledge base + web search.
+        Phase 2: Minimal knowledge enrichment - LET CLAUDE THINK FIRST!
         
-        Enhanced to be more proactive with web search for general questions.
+        NEW PHILOSOPHY (LLM-Driven Approach):
+        - Let Claude/LLM use its own knowledge as PRIMARY source
+        - Only use web search when LLM explicitly needs current/unknown info
+        - Prefer code generation (boto3, API calls) over web search
+        - Web search is a FALLBACK ASSISTANT, not front-and-center
         
         For each question in the analysis:
-        1. Check knowledge base first
-        2. If unknown OR needs current info, search the web
-        3. Learn and store the answer
+        1. Check knowledge base first (fast lookup)
+        2. ONLY if critical technical detail missing → web search
+        3. Otherwise, let Claude figure it out with its own intelligence
         
         Args:
             analysis: Analysis result from Phase 1
             user_request: Original user request (for context)
         
         Returns:
-            Enriched analysis with answers
+            Enriched analysis with minimal but critical answers
         """
         questions = analysis.get("questions", [])
         
-        # Check if this is a general question (not an action request)
-        is_general_question = any(keyword in user_request.lower() for keyword in [
-            "what is", "what are", "how does", "why", "explain", "tell me about",
-            "difference", "compare", "best practice", "recommended"
-        ])
-        
-        # Skip enrichment if no questions
+        # Skip enrichment if no questions - let Claude handle it
         if not questions or len(questions) == 0:
-            # But if it's a general question, search directly
-            if is_general_question:
-                console.print(f"\n[bold cyan]🔍 General question detected - searching web...[/bold cyan]")
-                search_result = self.web_search.search(user_request, max_results=5)
-                if search_result.get("success"):
-                    analysis["knowledge"] = {
-                        "direct_answer": search_result.get("answer", ""),
-                        "sources": search_result.get("sources", [])
-                    }
-                    return analysis
-            else:
-                console.print(f"\n[dim]🔍 No knowledge gaps detected, proceeding...[/dim]")
-                analysis["knowledge"] = {}
-                return analysis
+            console.print(f"\n[dim]🧠 No knowledge gaps - letting LLM brain handle this...[/dim]")
+            analysis["knowledge"] = {}
+            return analysis
         
         answers = {}
-        console.print(f"\n[bold cyan]🔍 KNOWLEDGE ENRICHMENT ({len(questions)} questions)[/bold cyan]")
+        console.print(f"\n[bold cyan]🔍 MINIMAL KNOWLEDGE CHECK ({len(questions)} questions)[/bold cyan]")
         
-        # More aggressive web search for general questions
-        if is_general_question:
-            # Search for all questions, not just technical ones
-            search_all = True
-        else:
-            # For action requests, only search critical technical questions
-            critical_keywords = ["regional", "global", "field", "endpoint", "api", "default", "current", "latest"]
-            search_all = False
+        # ONLY search for truly critical technical questions
+        # e.g., "Is S3 regional or global?" "What's the KMS API endpoint?"
+        critical_keywords = [
+            "regional", "global", "endpoint", "api version", 
+            "field name", "exact format", "deprecated"
+        ]
         
-        for question in questions[:5]:  # Increased limit for general questions
-            # Skip clarifying questions (those are for user, not web)
+        for question in questions[:3]:  # Reduced limit - let Claude handle most things
             question_lower = question.lower()
-            if any(word in question_lower for word in ["should be", "user wants", "looking for", "specific"]):
-                console.print(f"[dim]Skipping clarifying question: {question}[/dim]")
-                continue
             
-            # For action requests, only search technical questions
-            if not search_all:
-                if not any(keyword in question_lower for keyword in critical_keywords):
-                    console.print(f"[dim]Skipping non-technical question: {question}[/dim]")
-                    continue
+            # Skip non-critical questions - let Claude answer from its own knowledge
+            is_critical = any(keyword in question_lower for keyword in critical_keywords)
+            
+            if not is_critical:
+                console.print(f"[dim]💭 Non-critical: {question} → Letting LLM brain handle[/dim]")
+                continue
             
             console.print(f"[cyan]Q: {question}[/cyan]")
             
