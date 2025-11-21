@@ -303,6 +303,12 @@ class ToolExecutor:
             elif tool_name == "execute_python_code":
                 return self._execute_python_code(tool_input)
             
+            elif tool_name == "query_agent_database":
+                return self._execute_query_agent_database(tool_input)
+            
+            elif tool_name == "store_in_database":
+                return self._execute_store_in_database(tool_input)
+            
             elif tool_name == "analyze_past_evidence":
                 return self._execute_analyze_past_evidence(tool_input)
             
