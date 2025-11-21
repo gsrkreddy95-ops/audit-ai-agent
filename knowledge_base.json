@@ -1,0 +1,94 @@
+{
+  "aws": {
+    "global_services": [
+      "s3",
+      "iam",
+      "cloudfront",
+      "route53",
+      "waf"
+    ],
+    "regional_services": [
+      "ec2",
+      "rds",
+      "kms",
+      "secretsmanager",
+      "lambda",
+      "dynamodb",
+      "ecs",
+      "eks"
+    ],
+    "service_behaviors": {
+      "s3": {
+        "type": "global",
+        "note": "S3 buckets are global; use any region or omit region parameter",
+        "default_date_field": "CreationDate"
+      },
+      "kms": {
+        "type": "regional",
+        "note": "KMS keys are regional; must specify region",
+        "default_date_field": "CreationDate"
+      },
+      "secretsmanager": {
+        "type": "regional",
+        "note": "Secrets are regional",
+        "default_date_field": "CreatedDate"
+      },
+      "ec2": {
+        "type": "regional",
+        "note": "EC2 resources are regional",
+        "default_date_field": "LaunchTime"
+      }
+    },
+    "default_regions": [
+      "us-east-1",
+      "us-west-2",
+      "eu-west-1",
+      "ap-northeast-1",
+      "ap-southeast-1"
+    ],
+    "learned_facts": {
+      "Is IAM a global or regional service in AWS?": {
+        "value": "No answer found",
+        "source": "web_search",
+        "confidence": 0.8,
+        "learned_at": "2025-11-20T12:34:50.743584"
+      }
+    }
+  },
+  "jira": {
+    "custom_fields": {},
+    "board_filters": {},
+    "query_patterns": {}
+  },
+  "confluence": {
+    "space_configs": {}
+  },
+  "github": {
+    "rate_limits": {
+      "search": "10 requests per minute",
+      "core": "5000 requests per hour"
+    }
+  },
+  "general": {
+    "error_solutions": {},
+    "best_practices": {},
+    "learned_facts": {
+      "Should the list include both global and regional services?": {
+        "value": "No answer found",
+        "source": "web_search",
+        "confidence": 0.8,
+        "learned_at": "2025-11-20T14:25:01.396544"
+      },
+      "What is the exact format of the CSV file?": {
+        "value": "No answer found",
+        "source": "web_search",
+        "confidence": 0.8,
+        "learned_at": "2025-11-20T16:15:02.696387"
+      }
+    }
+  },
+  "meta": {
+    "last_updated": "2025-11-20T16:15:02.697044",
+    "version": "1.0.0"
+  }
+}

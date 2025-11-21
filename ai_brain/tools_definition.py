@@ -983,6 +983,94 @@ Results are automatically learned and stored for future use.""",
             }
         },
         {
+            "name": "query_agent_database",
+            "description": """🗄️ Query the agent's persistent database for past work data.
+
+This database stores:
+- **Jira tickets** (categorized as prod/non-prod, searchable by project, status, environment)
+- **AWS resources** (tracked over time by type, account, region)
+- **Audit evidence** (organized by RFI code, fiscal year, service)
+- **Agent memory** (preferences, learned facts, shortcuts)
+- **Task history** (past executions, success rates, durations)
+
+Use this to answer questions like:
+- "Show me all prod Jira tickets"
+- "What S3 buckets did we discover in ctr-prod?"
+- "What evidence do I have for AWS-RDS?"
+- "What tasks failed last week?"
+- "What's my preferred AWS region?"
+- "Show statistics about collected evidence"
+
+This lets the agent remember past work and provide intelligent insights!""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "query_type": {
+                        "type": "string",
+                        "enum": ["jira_tickets", "aws_resources", "audit_evidence", "agent_memory", "task_history", "statistics", "custom"],
+                        "description": "Type of data to query"
+                    },
+                    "filters": {
+                        "type": "object",
+                        "description": """Filters for the query (varies by type):
+- jira_tickets: {"environment": "prod", "project": "SBG"}
+- aws_resources: {"resource_type": "s3", "account": "ctr-prod", "region": "us-east-1"}
+- audit_evidence: {"rfi_code": "AWS-001", "fiscal_year": "FY2025", "service": "rds"}
+- agent_memory: {"category": "preference", "key": "default_region"}
+- task_history: {"status": "completed", "task_type": "screenshot"}"""
+                    },
+                    "custom_sql": {
+                        "type": "string",
+                        "description": "Custom SQL query (only for query_type='custom')"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum results to return (default: 100)"
+                    }
+                },
+                "required": ["query_type"]
+            }
+        },
+        {
+            "name": "store_in_database",
+            "description": """💾 Store data in the agent's persistent database.
+
+Use this to remember:
+- Jira tickets discovered/analyzed
+- AWS resources found during scans
+- Audit evidence collected
+- User preferences
+- Important facts learned
+
+This allows the agent to build knowledge over time and provide better insights.
+
+Examples:
+- After analyzing Jira CSV: Store all tickets in database
+- After AWS resource scan: Store resources for tracking
+- After collecting evidence: Log evidence with metadata
+- User says "always use us-east-1": Remember as preference""",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "data_type": {
+                        "type": "string",
+                        "enum": ["jira_ticket", "aws_resource", "audit_evidence", "agent_memory", "task"],
+                        "description": "Type of data to store"
+                    },
+                    "data": {
+                        "type": "object",
+                        "description": """Data to store (structure varies by type):
+- jira_ticket: {ticket_key, summary, description, status, environment, project, ...}
+- aws_resource: {resource_id, resource_type, account, region, created_date, tags, ...}
+- audit_evidence: {rfi_code, evidence_type, file_path, aws_account, service, ...}
+- agent_memory: {category, key, value, context}
+- task: {user_request, task_type, status, duration_seconds, result_summary}"""
+                    }
+                },
+                "required": ["data_type", "data"]
+            }
+        },
+        {
             "name": "analyze_past_evidence",
             "description": """📚 Analyze previous years' audit evidence to learn patterns and requirements.
 
