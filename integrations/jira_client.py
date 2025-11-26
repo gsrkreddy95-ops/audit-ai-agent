@@ -93,7 +93,11 @@ class JiraSearchClient:
         limit: Optional[int] = None,
         expand: Optional[Iterable[str]] = None,
     ) -> Generator[JiraIssue, None, None]:
-        """Yield issues that match *jql* with robust pagination.
+        """Yield issues that match *jql* with robust pagination using NEW Jira API.
+        
+        Migration Info:
+        - OLD API: GET /rest/api/{version}/search with startAt parameter  
+        - NEW API: POST /rest/api/{version}/search/jql with nextPageToken
 
         Args:
             jql: Jira Query Language string.
@@ -102,27 +106,41 @@ class JiraSearchClient:
             expand: Optional expand parameters.
         """
 
-        start_at = 0
+        next_page_token = None
         fetched = 0
-        total: Optional[int] = None
 
         while True:
             max_results = self._page_size_for_limit(limit, fetched)
+            
+            # Build payload (fields must be array, not comma-separated string)
+            payload = {
+                "jql": jql,
+                "maxResults": max_results,
+            }
+            
+            # Add fields if specified
+            if fields:
+                payload["fields"] = list(fields)  # Array, not string
+            
+            # Add expand if specified  
+            if expand:
+                payload["expand"] = ",".join(expand)
+            
+            # Add nextPageToken for pagination (only after first page)
+            if next_page_token:
+                payload["nextPageToken"] = next_page_token
+            
+            # POST request (not GET)
             response = self._request(
-                "GET",
-                f"{self.base_url}/rest/api/{self.api_version}/search",
-                params={
-                    "jql": jql,
-                    "startAt": start_at,
-                    "maxResults": max_results,
-                    "fields": ",".join(fields) if fields else None,
-                    "expand": ",".join(expand) if expand else None,
-                },
+                "POST",
+                f"{self.base_url}/rest/api/{self.api_version}/search/jql",
+                json_payload=payload
             )
 
             data = response.json()
             issues = data.get("issues", [])
-            total = data.get("total", total)
+            is_last = data.get("isLast", True)
+            next_page_token = data.get("nextPageToken")
 
             if not issues:
                 break
@@ -133,8 +151,8 @@ class JiraSearchClient:
                 if limit and fetched >= limit:
                     return
 
-            start_at += len(issues)
-            if total is not None and start_at >= total:
+            # Check if last page
+            if is_last or not next_page_token:
                 break
 
     # ------------------------------------------------------------------
@@ -145,17 +163,23 @@ class JiraSearchClient:
             return self.page_size
         remaining = max(limit - fetched, 0)
         return min(self.page_size, remaining or self.page_size)
-    def _request(self, method: str, url: str, params: Optional[Dict] = None) -> Response:
+    def _request(self, method: str, url: str, params: Optional[Dict] = None, json_payload: Optional[Dict] = None) -> Response:
         last_error: Optional[Exception] = None
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = self.session.request(
-                    method,
-                    url,
-                    params={k: v for k, v in (params or {}).items() if v is not None},
-                    timeout=self.timeout,
-                )
+                # Build request kwargs
+                kwargs = {"timeout": self.timeout}
+                
+                # Add params for GET requests
+                if params:
+                    kwargs["params"] = {k: v for k, v in params.items() if v is not None}
+                
+                # Add JSON payload for POST requests
+                if json_payload:
+                    kwargs["json"] = json_payload
+                
+                response = self.session.request(method, url, **kwargs)
 
                 if response.status_code == 429:
                     self._sleep_with_backoff(attempt, reason="rate limited (429)")

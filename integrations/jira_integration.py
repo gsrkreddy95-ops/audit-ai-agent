@@ -42,31 +42,42 @@ class JiraIntegration:
     def _request_jira_search_page(
         self,
         jql_query: str,
-        start_at: int,
         max_results: int,
-        fields: List[str]
+        fields: List[str],
+        next_page_token: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Call Jira search endpoint (GET /rest/api/3/search/jql).
-        Jira removed the POST /search endpoint for Cloud instances.
+        Call Jira search endpoint using the NEW API (POST /rest/api/3/search/jql).
+        Uses nextPageToken-based pagination instead of startAt.
+        
+        Migration Info:
+        - OLD API: GET /rest/api/3/search with startAt parameter
+        - NEW API: POST /rest/api/3/search/jql with nextPageToken
         """
         server = self.jira._options['server']
-        fields_param = ",".join(fields)
         try:
-            params = {
+            # Build payload (fields must be an array, not a comma-separated string)
+            payload = {
                 "jql": jql_query,
-                "startAt": start_at,
                 "maxResults": max_results,
-                "fields": fields_param
+                "fields": fields  # Array format, not string
             }
-            response = self.jira._session.get(
+            
+            # Add nextPageToken for pagination (only after first page)
+            if next_page_token:
+                payload['nextPageToken'] = next_page_token
+            
+            # POST request (not GET)
+            response = self.jira._session.post(
                 f"{server}/rest/api/3/search/jql",
-                params=params
+                json=payload
             )
-            if start_at == 0:
+            
+            if not next_page_token:  # Log only on first page
                 console.print(
-                    f"[dim]   API Request: GET /rest/api/3/search/jql (startAt={start_at}, maxResults={max_results})[/dim]"
+                    f"[dim]   API Request: POST /rest/api/3/search/jql (maxResults={max_results})[/dim]"
                 )
+            
             response.raise_for_status()
             return response.json()
         except Exception as error:
@@ -1386,7 +1397,7 @@ class JiraIntegration:
                     return sliced_tickets
                 
                 tickets = []
-                start_at = 0
+                next_page_token = None  # Token-based pagination (NEW API)
                 page_size = 100  # Jira API max per request
                 total_fetched = 0
                 log_interval = max(int(os.getenv("JIRA_PAGINATION_LOG_INTERVAL", "500")), 100)
@@ -1427,7 +1438,7 @@ class JiraIntegration:
                 pages_without_progress = 0
                 
                 while True:
-                    # Fetch a page of results using Jira Cloud's new JQL API
+                    # Fetch a page of results using Jira Cloud's new JQL API with nextPageToken pagination
                     try:
                         # Determine current page size respecting limits (if any)
                         current_page_size = page_size
@@ -1440,7 +1451,7 @@ class JiraIntegration:
                         
                         # Show progress for page fetches
                         if page_number > 1:
-                            console.print(f"[dim]   Fetching page {page_number}... (startAt={start_at})[/dim]")
+                            console.print(f"[dim]   Fetching page {page_number}...[/dim]")
                         
                         fields_list = [
                             "key", "summary", "status", "priority", "assignee",
@@ -1452,42 +1463,25 @@ class JiraIntegration:
                         
                         search_results = self._request_jira_search_page(
                             jql_query=jql_query,
-                            start_at=start_at,
                             max_results=current_page_size,
-                            fields=fields_list
+                            fields=fields_list,
+                            next_page_token=next_page_token
                         )
                         
-                        # Check total available results from Jira
-                        # NOTE: Jira Cloud's /search/jql API sometimes returns total=0 incorrectly
-                        # We'll trust it only if it's non-zero or if no results are returned
-                        if total_available is None:
-                            reported_total = search_results.get('total', 0)
-                            num_issues_in_response = len(search_results.get('issues', []))
-                            
-                            # If Jira reports 0 but returns results, it's a bug - ignore the total
-                            if reported_total == 0 and num_issues_in_response > 0:
-                                console.print(f"[yellow]⚠️  Jira reported total=0 but returned {num_issues_in_response} issues (known API bug)[/yellow]")
-                                console.print(f"[dim]   Will paginate until no more results...[/dim]")
-                                total_available = -1  # Signal to ignore total and rely on page size
-                            else:
-                                total_available = reported_total
-                                console.print(f"[dim]   Total matching tickets in Jira: {total_available}[/dim]")
-                                
-                                # Adjust max_results if it exceeds what's actually available
-                                if max_results == 0 or max_results > total_available:
-                                    effective_max = total_available
-                                else:
-                                    effective_max = max_results
-                                console.print(f"[dim]   Will fetch up to: {effective_max} tickets[/dim]")
+                        # Extract pagination info from response
+                        is_last = search_results.get('isLast', True)
+                        next_page_token = search_results.get('nextPageToken')
+                        
+                        # Check if date filter is working (first page only)
+                        if page_number == 1:
+                            page_issues_preview = self._build_issue_objects(search_results)
+                            if page_issues_preview and 'created' in jql_query.lower():
+                                console.print(f"[dim]   🔍 DEBUG: Checking if date filter is working...[/dim]")
+                                for idx, issue in enumerate(page_issues_preview[:3]):  # Check first 3 tickets
+                                    created_date = getattr(getattr(issue, 'fields', None), 'created', 'N/A')
+                                    console.print(f"[dim]      Ticket {idx+1} created: {created_date}[/dim]")
                         
                         page_issues = self._build_issue_objects(search_results)
-                        
-                        # DEBUG: Check if date filter is working by inspecting first few tickets
-                        if start_at == 0 and page_issues and 'created' in jql_query.lower():
-                            console.print(f"[dim]   🔍 DEBUG: Checking if date filter is working...[/dim]")
-                            for idx, issue in enumerate(page_issues[:3]):  # Check first 3 tickets
-                                created_date = getattr(getattr(issue, 'fields', None), 'created', 'N/A')
-                                console.print(f"[dim]      Ticket {idx+1} created: {created_date}[/dim]")
                     except Exception as e:
                         console.print(f"[red]❌ Error fetching page: {e}[/red]")
                         raise
@@ -1528,30 +1522,28 @@ class JiraIntegration:
                     
                     page_number += 1
                     
-                    # SMART EARLY EXIT: If we've fetched way more than expected (3x Jira's reported total),
-                    # and Jira is clearly ignoring filters, stop and rely on post-filter
-                    if total_available and total_available > 0 and total_fetched > (total_available * 3):
-                        console.print(f"[yellow]⚠️  Fetched {total_fetched} tickets but Jira reported total={total_available}[/yellow]")
-                        console.print(f"[yellow]   Jira API is ignoring filters. Stopping pagination and applying post-filter...[/yellow]")
+                    # Check stopping conditions for NEW API
+                    # 1. isLast flag indicates no more pages
+                    if is_last:
+                        console.print(f"[dim]   Last page reached (isLast=true)[/dim]")
                         break
                     
-                    # Check stopping conditions
-                    # 1. No more results on this page (most reliable indicator)
-                    if len(page_issues) < current_page_size:
-                        console.print(f"[dim]   Last page reached (got {len(page_issues)} < {current_page_size})[/dim]")
+                    # 2. No nextPageToken means no more pages
+                    if not next_page_token:
+                        console.print(f"[dim]   Last page reached (no nextPageToken)[/dim]")
                         break
                     
-                    # 2. Reached the total available from Jira (only if total is reliable)
-                    if total_available is not None and total_available > 0 and total_fetched >= total_available:
-                        console.print(f"[dim]   All available tickets fetched ({total_fetched}/{total_available})[/dim]")
+                    # 3. Empty page (no issues returned)
+                    if len(page_issues) == 0:
+                        console.print(f"[dim]   Last page reached (empty page)[/dim]")
                         break
                     
-                    # 3. Hit the safety/user-specified limit
+                    # 4. Hit the safety/user-specified limit
                     if effective_max is not None and total_fetched >= effective_max:
                         console.print(f"[dim]   Limit reached ({total_fetched}/{effective_max})[/dim]")
                         break
                     
-                    # 4. Guardrail for unbounded queries without created filters
+                    # 5. Guardrail for unbounded queries without created filters
                     if (
                         not safety_enabled
                         and effective_max is None
@@ -1565,8 +1557,6 @@ class JiraIntegration:
                         )
                         guard_triggered = True
                         break
-                    
-                    start_at += current_page_size
                 
                 console.print(f"[dim]   Total tickets fetched before filtering: {total_fetched}[/dim]")
 
@@ -1602,7 +1592,7 @@ class JiraIntegration:
                 console.print(f"[green]✅ Found {len(tickets)} tickets (fetched all pages)[/green]")
                 return tickets
             else:
-                # Single request (no pagination) using new Jira Cloud API (POST method)
+                # Single request (no pagination) using new Jira Cloud API (POST method with nextPageToken)
                 try:
                     fields_list = [
                         "key", "summary", "status", "priority", "assignee",
@@ -1612,9 +1602,9 @@ class JiraIntegration:
                     page_size = max_results or 50
                     search_results = self._request_jira_search_page(
                         jql_query=jql_query,
-                        start_at=0,
                         max_results=page_size,
-                        fields=fields_list
+                        fields=fields_list,
+                        next_page_token=None  # First page
                     )
                     issues = self._build_issue_objects(search_results)
                 except Exception as e:
